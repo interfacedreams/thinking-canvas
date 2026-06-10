@@ -1,18 +1,24 @@
 import { create } from 'zustand'
 import { applyNodeChanges, type Node, type NodeChange, type Viewport } from '@xyflow/react'
-import type { CanvasDoc } from '../../../shared/types'
+import type { CanvasDoc, PersistedMessage, RepoState } from '../../../shared/types'
 
 export const NODE_W = 600
 export const MAX_NODE_H = 1280
+const MIN_GROW_H = 280
 export const GAP = 24
+
+/**
+ * Tallest a node should auto-grow while still fitting on screen at this zoom.
+ * Node heights live in flow coordinates; on screen they render at height × zoom.
+ */
+export function viewportFitHeight(zoom: number): number {
+  const h = (window.innerHeight * 0.85) / Math.max(zoom, 0.05)
+  return Math.round(Math.min(MAX_NODE_H, Math.max(MIN_GROW_H, h)))
+}
 // Placement estimate for a node whose content hasn't been measured yet.
 const EST_NODE_H = 360
 
-export interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  text: string
-}
+export type Message = PersistedMessage
 
 export type ChatStatus = 'empty' | 'idle' | 'streaming'
 
@@ -23,6 +29,7 @@ export interface ChatData {
   draft: string
   minimized: boolean
   savedHeight?: number // explicit height to restore when un-minimizing
+  growthCap?: number // auto-grow ceiling (flow px), sized to fit the screen at send time
   sessionId?: string // Agent SDK session; set after the first turn, used for resume
   [key: string]: unknown
 }
@@ -109,6 +116,10 @@ interface CanvasState {
   nodes: ChatNode[]
   viewport: Viewport
   loaded: boolean
+  repo: RepoState | null // null until the first repo:get answers
+  init: () => Promise<Viewport | null>
+  chooseRepo: () => Promise<Viewport | null>
+  selectRepo: (path: string) => Promise<Viewport | null>
   onNodesChange: (changes: NodeChange<ChatNode>[]) => void
   setViewport: (vp: Viewport) => void
   addNode: (view: Rect) => void
@@ -117,6 +128,7 @@ interface CanvasState {
   discardNode: (id: string) => void
   toggleMinimize: (id: string) => void
   load: () => Promise<Viewport | null>
+  persistSoon: () => void
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -143,6 +155,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             width: n.width ?? NODE_W,
             ...(height != null ? { height } : {}),
             title: n.data.title,
+            ...(n.data.messages.length > 0 ? { messages: n.data.messages } : {}),
             ...(n.data.minimized ? { minimized: true } : {}),
             ...(n.data.sessionId ? { sessionId: n.data.sessionId } : {})
           }
@@ -158,6 +171,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     nodes: [],
     viewport: { x: 0, y: 0, zoom: 1 },
     loaded: false,
+
+    persistSoon: persist,
 
     onNodesChange: (changes) => {
       set((s) => ({ nodes: applyNodeChanges(changes, s.nodes) }))
@@ -213,18 +228,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       const userMsg: Message = { id: uid(), role: 'user', text }
       const assistantMsg: Message = { id: uid(), role: 'assistant', text: '' }
+      // Sized to the screen at send time so the reply never grows past the
+      // viewport — once the node hits the cap, the transcript scrolls instead.
+      const growthCap = viewportFitHeight(get().viewport.zoom)
       set((s) => ({
         nodes: s.nodes.map((n) =>
           n.id === id
             ? {
                 ...n,
-                // release any fixed height so the node grows with the reply (up to the max)
+                // release any fixed height so the node grows with the reply (up to the cap)
                 height: undefined,
                 data: {
                   ...n.data,
                   messages: [...node.data.messages, userMsg, assistantMsg],
                   draft: '',
                   status: 'streaming' as const,
+                  growthCap,
                   title: node.data.title || text.slice(0, 60)
                 }
               }
@@ -242,20 +261,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         set({ loaded: true })
         return null
       }
+      // Heights saved on a bigger screen may not fit this one — clamp on the way in.
+      const cap = viewportFitHeight(doc.viewport.zoom)
       set({
         loaded: true,
         viewport: doc.viewport,
         nodes: doc.nodes.map((p) => ({
           ...makeNode(p.position, {
             title: p.title,
-            status: p.title ? 'idle' : 'empty',
+            messages: p.messages ?? [],
+            status: p.title || (p.messages?.length ?? 0) > 0 ? 'idle' : 'empty',
             minimized: p.minimized ?? false,
-            savedHeight: p.minimized ? p.height : undefined,
+            savedHeight: p.minimized && p.height != null ? Math.min(p.height, cap) : undefined,
+            growthCap: cap,
             sessionId: p.sessionId
           }),
           id: p.id,
           width: p.width,
-          ...(p.height != null && !p.minimized ? { height: p.height } : {})
+          ...(p.height != null && !p.minimized ? { height: Math.min(p.height, cap) } : {})
         }))
       })
       return doc.viewport
@@ -275,6 +298,7 @@ window.api.thread.onEvent((event) => {
 
   if (event.type === 'session' && event.sessionId) {
     patch(event.nodeId, () => ({ sessionId: event.sessionId }))
+    useCanvasStore.getState().persistSoon()
   } else if (event.type === 'delta' && event.text) {
     patch(event.nodeId, (data) => {
       const last = data.messages[data.messages.length - 1]
@@ -296,5 +320,6 @@ window.api.thread.onEvent((event) => {
             : data.messages
       }
     })
+    useCanvasStore.getState().persistSoon()
   }
 })

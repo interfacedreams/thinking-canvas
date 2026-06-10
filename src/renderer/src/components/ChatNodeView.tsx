@@ -1,8 +1,13 @@
 import { memo, useEffect, useRef } from 'react'
-import { NodeResizeControl, ResizeControlVariant, type NodeProps } from '@xyflow/react'
+import {
+  NodeResizeControl,
+  ResizeControlVariant,
+  useReactFlow,
+  type NodeProps
+} from '@xyflow/react'
 import TextareaAutosize from 'react-textarea-autosize'
 import Markdown from 'react-markdown'
-import { useCanvasStore, type ChatNode, type Message } from '../store/canvas'
+import { useCanvasStore, MAX_NODE_H, type ChatNode, type Message } from '../store/canvas'
 import BeeIcon from './BeeIcon'
 
 function MessageView({
@@ -14,13 +19,13 @@ function MessageView({
 }): React.JSX.Element {
   if (message.role === 'user') {
     return (
-      <div className="mb-2 w-full bg-neutral-100 px-3 py-2 whitespace-pre-wrap">{message.text}</div>
+      <div className="mb-2 ml-auto w-fit max-w-full rounded-[10px] bg-white px-3 py-2 break-words whitespace-pre-wrap">
+        {message.text}
+      </div>
     )
   }
   if (pending && !message.text) {
-    return (
-      <div className="mb-2 animate-pulse px-3 py-1 tracking-widest text-neutral-400">●●●</div>
-    )
+    return <div className="mb-2 animate-pulse px-3 py-1 tracking-widest text-neutral-400">●●●</div>
   }
   return (
     <div className="prose-chat mb-2 px-3 py-1">
@@ -29,19 +34,23 @@ function MessageView({
   )
 }
 
-function MinimizeToggleIcon({ minimized }: { minimized: boolean }): React.JSX.Element {
+function MinimizeIcon(): React.JSX.Element {
   return (
     <svg viewBox="0 0 16 16" className="h-3.5 w-3.5">
-      {minimized ? (
-        <g stroke="#92690B" strokeWidth={1.5} strokeLinecap="round" fill="none">
-          <path d="M6.5 6.5 L2.5 2.5 M2.5 2.5 H5.5 M2.5 2.5 V5.5" />
-          <path d="M9.5 6.5 L13.5 2.5 M13.5 2.5 H10.5 M13.5 2.5 V5.5" />
-          <path d="M6.5 9.5 L2.5 13.5 M2.5 13.5 H5.5 M2.5 13.5 V10.5" />
-          <path d="M9.5 9.5 L13.5 13.5 M13.5 13.5 H10.5 M13.5 13.5 V10.5" />
-        </g>
-      ) : (
-        <path d="M3.5 8 H12.5" stroke="#92690B" strokeWidth={1.8} strokeLinecap="round" />
-      )}
+      <path d="M3.5 8 H12.5" stroke="#92690B" strokeWidth={1.8} strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ExpandIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5">
+      <g stroke="#92690B" strokeWidth={1.5} strokeLinecap="round" fill="none">
+        <path d="M6.5 6.5 L2.5 2.5 M2.5 2.5 H5.5 M2.5 2.5 V5.5" />
+        <path d="M9.5 6.5 L13.5 2.5 M13.5 2.5 H10.5 M13.5 2.5 V5.5" />
+        <path d="M6.5 9.5 L2.5 13.5 M2.5 13.5 H5.5 M2.5 13.5 V10.5" />
+        <path d="M9.5 9.5 L13.5 13.5 M13.5 13.5 H10.5 M13.5 13.5 V10.5" />
+      </g>
     </svg>
   )
 }
@@ -51,9 +60,17 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
   const send = useCanvasStore((s) => s.send)
   const discardNode = useCanvasStore((s) => s.discardNode)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
+  // Explicit height only (user resize / restored from disk) — React Flow's own
+  // `height` prop reports the *measured* height, which would pin the node at
+  // whatever size it currently is and stop it from growing with new content.
+  const explicitHeight = useCanvasStore((s) => s.nodes.find((n) => n.id === id)?.height)
+  const { fitView } = useReactFlow()
 
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Follow new content only while the user is at (or near) the bottom,
+  // so scrolling up to read history never gets yanked back down.
+  const stickToBottom = useRef(true)
   const streaming = data.status === 'streaming'
   const empty = data.messages.length === 0
 
@@ -78,17 +95,15 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
     if (el) el.scrollTop = el.scrollHeight
   }, [])
 
-  // The transcript is `nowheel` (plain scroll stays inside it), but ⌘/ctrl+scroll
-  // and pinch should still zoom the canvas — forward those to the React Flow pane.
+  // The transcript is `nowheel` (plain scroll stays inside it), but two cases
+  // must still reach React Flow: ⌘/ctrl+scroll and pinch (canvas zoom), and any
+  // scroll the transcript can't absorb — no overflow, or already at the edge —
+  // which pans the canvas so an off-screen node bottom can be scrolled into view.
+  const lastInnerWheelAt = useRef(0)
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const onWheel = (e: WheelEvent): void => {
-      if (!(e.metaKey || e.ctrlKey)) {
-        // Any upward wheel during streaming releases the auto-follow immediately.
-        if (e.deltaY < 0) stickToBottom.current = false
-        return
-      }
+    const forwardToPane = (e: WheelEvent): void => {
       e.preventDefault()
       e.stopPropagation()
       const pane = el.closest('.react-flow')?.querySelector('.react-flow__pane')
@@ -106,13 +121,31 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
         })
       )
     }
+    const onWheel = (e: WheelEvent): void => {
+      if (e.metaKey || e.ctrlKey) {
+        forwardToPane(e)
+        return
+      }
+      // Any upward wheel during streaming releases the auto-follow immediately.
+      if (e.deltaY < 0) stickToBottom.current = false
+      // Mostly-horizontal gestures stay native (e.g. a code block scrolling sideways).
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+      const canScroll = el.scrollHeight - el.clientHeight > 1
+      const atEdge =
+        e.deltaY < 0 ? el.scrollTop <= 0 : el.scrollHeight - el.scrollTop - el.clientHeight <= 1
+      if (canScroll && !atEdge) {
+        lastInnerWheelAt.current = performance.now()
+        return
+      }
+      // At an edge, a fling that just landed here shouldn't slingshot into a
+      // canvas pan — only chain once the gesture that hit the edge has died down.
+      if (canScroll && performance.now() - lastInnerWheelAt.current < 200) return
+      forwardToPane(e)
+    }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [empty])
 
-  // Follow new content only while the user is at (or near) the bottom,
-  // so scrolling up to read history never gets yanked back down.
-  const stickToBottom = useRef(true)
   const handleScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
@@ -127,9 +160,24 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
 
   const canSend = !streaming && data.draft.trim().length > 0
 
+  const expandAndCenter = (): void => {
+    const fit = (): void => {
+      void fitView({ nodes: [{ id }], duration: 300, padding: 0.1, maxZoom: 1 })
+    }
+    if (data.minimized) {
+      toggleMinimize(id)
+      // let React Flow re-measure the expanded node before fitting to it
+      setTimeout(fit, 50)
+    } else {
+      fit()
+    }
+  }
+
   return (
     <div
-      className={`drag-handle flex h-full max-h-[1280px] w-full cursor-grab flex-col rounded-[14px] border border-black/5 bg-[#FEF3C7] shadow-md active:cursor-grabbing ${
+      // the growth cap only limits auto-sizing; an explicit (user-resized) height wins
+      style={{ maxHeight: explicitHeight ?? data.growthCap ?? MAX_NODE_H }}
+      className={`drag-handle flex h-full w-full cursor-grab flex-col rounded-[14px] border border-black/5 bg-[#FEF3C7] shadow-md active:cursor-grabbing ${
         selected ? 'ring-2 ring-amber-400/70' : ''
       }`}
     >
@@ -172,13 +220,23 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
           data.minimized ? '' : 'border-b border-[#EDD27E]'
         }`}
       >
+        {!data.minimized && (
+          <button
+            type="button"
+            onClick={() => toggleMinimize(id)}
+            title="Minimize"
+            className="nodrag flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md bg-[#EDD27E]/60 transition-colors hover:bg-[#E2BF52]"
+          >
+            <MinimizeIcon />
+          </button>
+        )}
         <button
           type="button"
-          onClick={() => toggleMinimize(id)}
-          title={data.minimized ? 'Expand' : 'Minimize'}
+          onClick={expandAndCenter}
+          title={data.minimized ? 'Expand' : 'Zoom to fit'}
           className="nodrag flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-md bg-[#EDD27E]/60 transition-colors hover:bg-[#E2BF52]"
         >
-          <MinimizeToggleIcon minimized={data.minimized} />
+          <ExpandIcon />
         </button>
         <span
           className={`truncate text-[13px] font-medium ${data.title ? 'text-[#92690B]' : 'text-[#92690B]/50'}`}
@@ -190,7 +248,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
       {!data.minimized && empty && <div className="min-h-0 flex-1" />}
 
       {!data.minimized && !empty && (
-        <div className="nodrag mx-1 mt-1 flex min-h-0 flex-1 cursor-auto flex-col overflow-hidden rounded-[10px] bg-white">
+        <div className="nodrag mx-1 mt-1 flex min-h-0 flex-1 cursor-auto flex-col overflow-hidden">
           <div
             ref={scrollRef}
             onScroll={handleScroll}

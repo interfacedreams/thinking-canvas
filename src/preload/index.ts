@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { CanvasDoc } from '../shared/types'
+import type { CanvasDoc, RepoState } from '../shared/types'
 
 export interface ThreadEvent {
   nodeId: string
@@ -13,6 +13,11 @@ export interface ThreadEvent {
 
 // Custom APIs for renderer
 const api = {
+  repo: {
+    get: (): Promise<RepoState> => ipcRenderer.invoke('repo:get'),
+    choose: (): Promise<RepoState | null> => ipcRenderer.invoke('repo:choose'),
+    select: (path: string): Promise<RepoState> => ipcRenderer.invoke('repo:select', path)
+  },
   canvas: {
     load: (): Promise<CanvasDoc | null> => ipcRenderer.invoke('canvas:load'),
     save: (doc: CanvasDoc): Promise<void> => ipcRenderer.invoke('canvas:save', doc)

@@ -70,7 +70,7 @@ body {
   font-size: 1.05em;
 }
 .prose-chat pre {
-  background: var(--color-neutral-100);
+  background: rgba(255, 255, 255, 0.7);
   border-radius: 8px;
   padding: 0.6em 0.8em;
   margin: 0 0 0.75em;
@@ -78,7 +78,7 @@ body {
   font-size: 0.85em;
 }
 .prose-chat code {
-  background: var(--color-neutral-100);
+  background: rgba(255, 255, 255, 0.7);
   border-radius: 4px;
   padding: 0.1em 0.3em;
   font-size: 0.875em;
