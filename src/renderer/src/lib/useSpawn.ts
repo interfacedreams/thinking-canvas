@@ -1,32 +1,21 @@
 import { useCallback } from 'react'
-import { useReactFlow } from '@xyflow/react'
-import { useCanvasStore, NODE_W } from '../store/canvas'
+import { useCanvasStore } from '../store/canvas'
 
 /**
- * Spawn a chat or note at a free spot near the current view, then center the
- * camera on it — the fresh node autofocuses, so it's type-ready when it lands.
+ * Arm placement mode for a chat or note: a ghost node sticks to the cursor
+ * and the next canvas click places it (PlacementOverlay handles that part).
+ * Re-arming the same kind disarms — the buttons and C / N keys toggle.
  * Shared by the new-chat/new-note buttons and the C / N / ⌘N shortcuts.
  */
 export function useSpawn(): (kind: 'chat' | 'note') => void {
-  const addNode = useCanvasStore((s) => s.addNode)
-  const addNote = useCanvasStore((s) => s.addNote)
-  const { getViewport, setCenter } = useReactFlow()
+  const setPlacing = useCanvasStore((s) => s.setPlacing)
 
   return useCallback(
     (kind) => {
-      if (!useCanvasStore.getState().repo?.current) return
-      const vp = getViewport()
-      const view = {
-        x: -vp.x / vp.zoom,
-        y: -vp.y / vp.zoom,
-        w: window.innerWidth / vp.zoom,
-        h: window.innerHeight / vp.zoom
-      }
-      const node = kind === 'note' ? addNote(view) : addNode(view)
-      // If zoomed way out, come in to a readable zoom; otherwise stay put.
-      const zoom = Math.max(vp.zoom, 1)
-      void setCenter(node.position.x + NODE_W / 2, node.position.y + 150, { zoom, duration: 250 })
+      const { folder, placing } = useCanvasStore.getState()
+      if (!folder?.current) return
+      setPlacing(placing === kind ? null : kind)
     },
-    [addNode, addNote, getViewport, setCenter]
+    [setPlacing]
   )
 }

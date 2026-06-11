@@ -21,6 +21,7 @@ const PAPER = '#FFFDF6'
 
 function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.Element {
   const setTitle = useCanvasStore((s) => s.setTitle)
+  const commitNoteTitle = useCanvasStore((s) => s.commitNoteTitle)
   const setNoteContent = useCanvasStore((s) => s.setNoteContent)
   const setViewVersion = useCanvasStore((s) => s.setViewVersion)
   const restoreVersion = useCanvasStore((s) => s.restoreVersion)
@@ -54,7 +55,9 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
   // A note is discardable while it has no substance yet.
   const blank = !data.content && !data.title && versions.length === 0 && !data.sessionId
 
-  useForwardedWheel(scrollRef, !data.minimized)
+  // Scrolling the note body requires focus (the node is selected by clicking
+  // it); otherwise the wheel pans the canvas.
+  useForwardedWheel(scrollRef, !data.minimized, !!selected)
 
   // The title is static text (part of the header drag surface) until the user
   // enters rename mode via the pencil button or a double-click on the title.
@@ -189,15 +192,22 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
             value={data.title}
             placeholder="Untitled note"
             onChange={(e) => setTitle(id, e.target.value)}
-            onBlur={() => setEditingTitle(false)}
+            onBlur={() => {
+              setEditingTitle(false)
+              void commitNoteTitle(id) // the file is renamed to match the title
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
                 setEditingTitle(false)
+                void commitNoteTitle(id)
                 editorRef.current?.focus()
               } else if (e.key === 'Escape') {
                 if (blank) discardNode(id)
-                else setEditingTitle(false)
+                else {
+                  setEditingTitle(false)
+                  void commitNoteTitle(id)
+                }
               }
             }}
             className="nodrag min-w-0 flex-1 cursor-text truncate bg-transparent text-[26px] font-medium text-(--np-deep) outline-none placeholder:text-(--np-deep) placeholder:opacity-50"
@@ -287,7 +297,7 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
               backgroundAttachment: 'local',
               backgroundPosition: '0 8px'
             }}
-            className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-y-auto pb-1 text-[15px] leading-[26px] text-neutral-900"
+            className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-1 text-[15px] leading-[26px] text-neutral-900"
           >
             {viewingOld ? (
               <div className="note-prose px-3 py-2 break-words opacity-80">

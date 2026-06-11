@@ -23,6 +23,7 @@ body {
 /* Wheel zooms the canvas everywhere, so transcripts scroll via a visible scrollbar */
 .transcript-scroll::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 .transcript-scroll::-webkit-scrollbar-thumb {
   background: var(--color-neutral-300);

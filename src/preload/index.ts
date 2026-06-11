@@ -2,20 +2,20 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   CanvasDoc,
+  FolderState,
   NoteVersion,
   PermissionReply,
   PersistedMessage,
-  RepoState,
   ThreadEvent,
   ThreadSendArgs
 } from '../shared/types'
 
 // Custom APIs for renderer
 const api = {
-  repo: {
-    get: (): Promise<RepoState> => ipcRenderer.invoke('repo:get'),
-    choose: (): Promise<RepoState | null> => ipcRenderer.invoke('repo:choose'),
-    select: (path: string): Promise<RepoState> => ipcRenderer.invoke('repo:select', path)
+  folder: {
+    get: (): Promise<FolderState> => ipcRenderer.invoke('folder:get'),
+    choose: (): Promise<FolderState | null> => ipcRenderer.invoke('folder:choose'),
+    select: (path: string): Promise<FolderState> => ipcRenderer.invoke('folder:select', path)
   },
   canvas: {
     load: (): Promise<CanvasDoc | null> => ipcRenderer.invoke('canvas:load'),
@@ -26,6 +26,9 @@ const api = {
       ipcRenderer.invoke('canvas:deleteThread', nodeId)
   },
   note: {
+    create: (nodeId: string): Promise<void> => ipcRenderer.invoke('note:create', nodeId),
+    rename: (nodeId: string, title: string): Promise<{ title: string } | null> =>
+      ipcRenderer.invoke('note:rename', nodeId, title),
     save: (nodeId: string, content: string): Promise<void> =>
       ipcRenderer.invoke('note:save', nodeId, content),
     restore: (

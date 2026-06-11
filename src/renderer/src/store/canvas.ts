@@ -1,13 +1,15 @@
 import { create } from 'zustand'
 import { applyNodeChanges, type Node, type NodeChange, type Viewport } from '@xyflow/react'
+import { DEFAULT_MODEL, MODEL_OPTIONS } from '../../../shared/types'
 import type {
   CanvasDoc,
+  FolderState,
   ForkRef,
+  ModelId,
   NoteVersion,
   PermissionRequest,
   PersistedEdge,
   PersistedMessage,
-  RepoState,
   TurnUsage
 } from '../../../shared/types'
 import { nextColorId } from '../lib/palette'
@@ -18,11 +20,14 @@ const MIN_GROW_H = 280
 export const GAP = 24
 
 /**
- * Tallest a node should auto-grow while still fitting on screen at this zoom.
- * Node heights live in flow coordinates; on screen they render at height × zoom.
+ * Tallest a node should auto-grow. Node heights live in flow coordinates; on
+ * screen they render at height × zoom. Zoomed in (zoom > 1) the cap shrinks so
+ * the node still fits the screen. Zoomed out it stays at the zoom-1 size: a
+ * node sized to fill a zoomed-out screen is huge in flow px, and its text is
+ * unreadably small whenever the whole node is in view.
  */
 export function viewportFitHeight(zoom: number): number {
-  const h = (window.innerHeight * 0.85) / Math.max(zoom, 0.05)
+  const h = (window.innerHeight * 0.85) / Math.max(zoom, 1)
   return Math.round(Math.min(MAX_NODE_H, Math.max(MIN_GROW_H, h)))
 }
 // Placement estimate for a node whose content hasn't been measured yet.
@@ -46,13 +51,17 @@ export interface ChatData {
   focusDraft?: boolean // autofocus the composer when the node mounts
   lastUsage?: TurnUsage // tokens/cost of the most recent turn
   pendingPermission?: PermissionRequest // tool call awaiting the user's Allow/Deny
+  // Research children are display-only researcher transcripts: no composer,
+  // no forking, no session of their own (they ran inside the lead's session).
+  kind?: 'research'
+  researchArmed?: boolean // composer toggle: the next send runs in research mode
   [key: string]: unknown
 }
 
 export interface NoteData {
   title: string
   color?: string
-  content: string // live markdown, mirror of .canvas/notes/<id>.md
+  content: string // live markdown, mirror of the note's title-named file
   versions: NoteVersion[]
   viewVersion?: number // runtime: index of the version being viewed; undefined = live
   status: 'idle' | 'streaming'
@@ -132,44 +141,6 @@ function tooClose(a: Rect, b: Rect): boolean {
   return intersects({ x: a.x - GAP, y: a.y - GAP, w: a.w + 2 * GAP, h: a.h + 2 * GAP }, b)
 }
 
-/**
- * Nearest free spot in/near the viewport: to the right of (or below) existing
- * visible nodes, never overlapping, GAP clearance. Viewport center if empty.
- */
-function findFreeSpot(nodes: CanvasNode[], view: Rect): { x: number; y: number } {
-  const boxes = nodes.map(boxOf)
-  if (boxes.length === 0) {
-    return {
-      x: view.x + view.w / 2 - NODE_W / 2,
-      y: view.y + Math.max(GAP, view.h / 2 - EST_NODE_H / 2)
-    }
-  }
-
-  const visible = boxes.filter((b) => intersects(b, view))
-  const seeds = visible.length > 0 ? visible : boxes
-  const candidates = seeds.flatMap((b) => [
-    { x: b.x + b.w + GAP, y: b.y },
-    { x: b.x, y: b.y + b.h + GAP }
-  ])
-
-  const free = candidates.filter(
-    (c) => !boxes.some((b) => tooClose({ x: c.x, y: c.y, w: NODE_W, h: EST_NODE_H }, b))
-  )
-
-  if (free.length > 0) {
-    const inView = (c: { x: number; y: number }): number =>
-      intersects({ x: c.x, y: c.y, w: NODE_W, h: EST_NODE_H }, view) ? 0 : 1
-    free.sort((a, b) => inView(a) - inView(b) || a.x - b.x || a.y - b.y)
-    return free[0]
-  }
-
-  // Everything packed — go to the right of the global bounding box.
-  return {
-    x: Math.max(...boxes.map((b) => b.x + b.w)) + GAP,
-    y: Math.min(...boxes.map((b) => b.y))
-  }
-}
-
 /** A node plus every chat forked from it, transitively (fork edges run source → target). */
 export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string> {
   const ids = new Set([rootId])
@@ -215,7 +186,9 @@ interface CanvasState {
   edges: PersistedEdge[]
   viewport: Viewport
   loaded: boolean
-  repo: RepoState | null // null until the first repo:get answers
+  folder: FolderState | null // null until the first folder:get answers
+  model: ModelId // model for new turns; persisted app-wide in localStorage
+  setModel: (model: ModelId) => void
   // Runtime-only: per node, the y-offset (flow px from the node top) of each
   // message that an edge anchors on — measured from the DOM by ChatNodeView so
   // fork edges can attach to the message itself rather than the node center.
@@ -223,27 +196,31 @@ interface CanvasState {
   setAnchorOffsets: (nodeId: string, offsets: Record<string, number>) => void
   // Runtime-only: node awaiting delete confirmation (the modal is open for it).
   pendingDeleteId: string | null
+  // Runtime-only: a new-node ghost is stuck to the cursor, waiting for a
+  // placement click on the canvas (armed by the toolbar buttons / C / N).
+  placing: 'chat' | 'note' | null
+  setPlacing: (kind: 'chat' | 'note' | null) => void
   requestDelete: (id: string) => void
   cancelDelete: () => void
   deleteChat: (id: string, cascade: boolean) => void
   init: () => Promise<Viewport | null>
-  chooseRepo: () => Promise<Viewport | null>
-  selectRepo: (path: string) => Promise<Viewport | null>
+  chooseFolder: () => Promise<Viewport | null>
+  selectFolder: (path: string) => Promise<Viewport | null>
   onNodesChange: (changes: NodeChange<CanvasNode>[]) => void
   setViewport: (vp: Viewport) => void
-  addNode: (view: Rect) => ChatNode
   addNodeAt: (position: { x: number; y: number }) => ChatNode
-  addNote: (view: Rect) => NoteNode
   addNoteAt: (position: { x: number; y: number }) => NoteNode
   clearFocusDraft: (id: string) => void
   setDraft: (id: string, draft: string) => void
   setColor: (id: string, color: string) => void
   setTitle: (id: string, title: string) => void
+  commitNoteTitle: (id: string) => Promise<void>
   setNoteContent: (id: string, content: string) => void
   setViewVersion: (id: string, index: number | undefined) => void
   restoreVersion: (id: string, index: number) => Promise<void>
   send: (id: string) => void
   sendNote: (id: string) => Promise<void>
+  toggleResearch: (id: string) => void
   respondPermission: (id: string, requestId: string, allow: boolean) => void
   forkChat: (nodeId: string) => string | null
   discardNode: (id: string) => void
@@ -253,9 +230,20 @@ interface CanvasState {
   persistThread: (id: string) => void
 }
 
+// Model choice is an app-wide preference, not part of any one canvas —
+// it lives in localStorage rather than canvas.json.
+const MODEL_STORAGE_KEY = 'bee-claude:model'
+function loadModel(): ModelId {
+  const saved = localStorage.getItem(MODEL_STORAGE_KEY)
+  return MODEL_OPTIONS.some((m) => m.id === saved) ? (saved as ModelId) : DEFAULT_MODEL
+}
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined
-// Debounced per-note autosave of live content (keystrokes → .canvas/notes/<id>.md).
+// Debounced per-note autosave of live content (keystrokes → the note's file).
 const noteSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+// Researchers streaming right now: `${leadNodeId}:${toolUseId}` → child node id.
+// Mid-turn only, so it lives outside the store (no re-renders, never persisted).
+const researchChildren = new Map<string, string>()
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   const patchData = (id: string, patch: Record<string, unknown>): void => {
@@ -274,7 +262,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         const height = n.data.minimized ? n.data.savedHeight : n.height
         return {
           id: n.id,
-          ...(isNote(n) ? { kind: 'note' as const } : {}),
+          ...(isNote(n)
+            ? { kind: 'note' as const }
+            : n.data.kind === 'research'
+              ? { kind: 'research' as const }
+              : {}),
           position: n.position,
           width: n.width ?? NODE_W,
           ...(height != null ? { height } : {}),
@@ -311,7 +303,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   }
 
   // Push a note's pending autosave through now — before an AI turn reads the
-  // file from disk, and before switching repos.
+  // file from disk, and before switching folders.
   const flushNoteSave = async (id: string): Promise<void> => {
     const timer = noteSaveTimers.get(id)
     if (!timer) return
@@ -325,8 +317,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     await Promise.all([...noteSaveTimers.keys()].map(flushNoteSave))
   }
 
-  // A debounced save writes to whichever repo is current in the main process —
-  // flush it before switching so it can't land in the next repo's canvas.
+  // A debounced save writes to whichever folder is current in the main process —
+  // flush it before switching so it can't land in the next folder's canvas.
   const flushSave = async (): Promise<void> => {
     await flushNoteSaves()
     if (saveTimer === undefined) return
@@ -335,15 +327,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     if (get().loaded) await window.api.canvas.save(buildDoc())
   }
 
-  const switchRepo = async (next: RepoState | null): Promise<Viewport | null> => {
+  const switchFolder = async (next: FolderState | null): Promise<Viewport | null> => {
     if (!next) return null // dialog canceled
-    if (next.current === get().repo?.current) {
-      set({ repo: next }) // same repo re-picked — just refresh the recents order
+    if (next.current === get().folder?.current) {
+      set({ folder: next }) // same folder re-picked — just refresh the recents order
       return null
     }
-    set({ repo: next, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 } })
+    set({ folder: next, nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 }, placing: null })
     const vp = await get().load()
-    return vp ?? { x: 0, y: 0, zoom: 1 } // fresh repo: reset the view
+    return vp ?? { x: 0, y: 0, zoom: 1 } // fresh folder: reset the view
   }
 
   const anyStreaming = (): boolean => get().nodes.some((n) => n.data.status === 'streaming')
@@ -368,8 +360,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
   const spawnNote = (position: { x: number; y: number }): NoteNode => {
     const node = adopt(makeNoteNode(position, { focusDraft: true, color: nextColor() }))
-    // The note's file exists from the moment the node does.
-    void window.api.note.save(node.id, '')
+    // The note's file exists from the moment the node does — main allocates
+    // a unique "Untitled" filename at the folder root.
+    void window.api.note.create(node.id)
     return node
   }
 
@@ -378,9 +371,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     edges: [],
     viewport: { x: 0, y: 0, zoom: 1 },
     loaded: false,
-    repo: null,
+    folder: null,
+    model: loadModel(),
     anchorOffsets: {},
     pendingDeleteId: null,
+    placing: null,
+
+    setPlacing: (kind) => set({ placing: kind }),
+
+    setModel: (model) => {
+      set({ model })
+      localStorage.setItem(MODEL_STORAGE_KEY, model)
+    },
 
     requestDelete: (id) => set({ pendingDeleteId: id }),
 
@@ -415,22 +417,22 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     init: async () => {
-      const repo = await window.api.repo.get()
-      set({ repo })
-      if (!repo.current) return null
+      const folder = await window.api.folder.get()
+      set({ folder })
+      if (!folder.current) return null
       return get().load()
     },
 
-    chooseRepo: async () => {
+    chooseFolder: async () => {
       if (anyStreaming()) return null
       await flushSave()
-      return switchRepo(await window.api.repo.choose())
+      return switchFolder(await window.api.folder.choose())
     },
 
-    selectRepo: async (path) => {
-      if (path === get().repo?.current || anyStreaming()) return null
+    selectFolder: async (path) => {
+      if (path === get().folder?.current || anyStreaming()) return null
       await flushSave()
-      return switchRepo(await window.api.repo.select(path))
+      return switchFolder(await window.api.folder.select(path))
     },
 
     persistSoon: persist,
@@ -447,11 +449,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persist()
     },
 
-    addNode: (view) => spawnNode(findFreeSpot(get().nodes, view)),
-
     addNodeAt: (position) => spawnNode(position),
-
-    addNote: (view) => spawnNote(findFreeSpot(get().nodes, view)),
 
     addNoteAt: (position) => spawnNote(position),
 
@@ -467,6 +465,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     setTitle: (id, title) => {
       patchData(id, { title })
       persist()
+    },
+
+    // Title editing settled — rename the note's file to match. Main may
+    // adjust the title (sanitized, suffixed if taken); adopt what it used.
+    commitNoteTitle: async (id) => {
+      const node = get().nodes.find((n) => n.id === id)
+      if (!node || !isNote(node)) return
+      const res = await window.api.note.rename(id, node.data.title)
+      if (res && res.title !== node.data.title) patchData(id, { title: res.title })
+      persist() // canvas.json picks up the new filename from main
     },
 
     setNoteContent: (id, content) => {
@@ -489,6 +497,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           void window.api.note.save(id, content)
         }, 600)
       )
+    },
+
+    toggleResearch: (id) => {
+      const node = get().nodes.find((n) => n.id === id)
+      if (node && isChat(node)) patchData(id, { researchArmed: !node.data.researchArmed })
     },
 
     setViewVersion: (id, index) => patchData(id, { viewVersion: index }),
@@ -546,7 +559,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         target: node.id,
         sourceMessageId: anchor.id
       }
-      set((s) => ({ nodes: [...s.nodes, node], edges: [...s.edges, edge] }))
+      // Selection moves with the keyboard (like adopt): without it the fork's
+      // transcript won't scroll — useForwardedWheel pans the canvas instead.
+      set((s) => ({
+        nodes: [
+          ...s.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)),
+          { ...node, selected: true }
+        ],
+        edges: [...s.edges, edge]
+      }))
       persist()
       return node.id
     },
@@ -609,7 +630,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   draft: '',
                   status: 'streaming' as const,
                   growthCap,
-                  title: node.data.title || text.slice(0, 60)
+                  title: node.data.title || text.slice(0, 60),
+                  researchArmed: false // one-shot: research applies to this send only
                 }
               } as CanvasNode)
             : n
@@ -622,8 +644,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         nodeId: id,
         text,
         sessionId: node.data.sessionId,
+        model: get().model,
         // first send of a forked node: fork the parent session at the anchor
-        ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {})
+        ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
+        ...(node.data.researchArmed ? { research: true } : {})
       })
     },
 
@@ -659,6 +683,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         nodeId: id,
         text,
         sessionId: node.data.sessionId,
+        model: get().model,
         kind: 'note',
         noteTitle: node.data.title
       })
@@ -709,7 +734,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               savedHeight,
               growthCap: cap,
               sessionId: p.sessionId,
-              forkOf: p.forkOf
+              forkOf: p.forkOf,
+              ...(p.kind === 'research' ? { kind: 'research' as const } : {})
             }),
             ...frame
           }
@@ -746,6 +772,64 @@ window.api.thread.onEvent((event) => {
         messages: [...node.data.messages.slice(0, -1), { ...last, text: last.text + event.text }]
       }
     })
+  } else if (event.type === 'spawn') {
+    // The lead called the Agent tool — give the researcher its own child node,
+    // wired to the lead's streaming assistant message like a fork edge.
+    const s = useCanvasStore.getState()
+    const parent = s.nodes.find((n) => n.id === event.nodeId)
+    if (!parent || !isChat(parent)) return
+    const anchor = parent.data.messages[parent.data.messages.length - 1]
+    const siblingIds = new Set(
+      s.edges
+        .filter((e) => e.source === parent.id && e.sourceMessageId === anchor?.id)
+        .map((e) => e.target)
+    )
+    const child = makeNode(
+      findForkSpot(
+        s.nodes,
+        parent,
+        s.nodes.filter((n) => siblingIds.has(n.id))
+      ),
+      {
+        kind: 'research',
+        title: event.description,
+        color: parent.data.color,
+        status: 'streaming',
+        growthCap: parent.data.growthCap,
+        // Born collapsed — the header dots show it's working; expand to watch.
+        minimized: true,
+        messages: [{ id: uid(), role: 'assistant', text: '' }]
+      }
+    )
+    researchChildren.set(`${event.nodeId}:${event.toolUseId}`, child.id)
+    setState((st) => ({
+      nodes: [...st.nodes, child],
+      edges: [
+        ...st.edges,
+        { id: uid(), source: parent.id, target: child.id, sourceMessageId: anchor?.id ?? '' }
+      ]
+    }))
+    useCanvasStore.getState().persistSoon()
+  } else if (event.type === 'childDelta') {
+    const childId = researchChildren.get(`${event.nodeId}:${event.toolUseId}`)
+    if (!childId) return // late delta for a child we never spawned — drop it
+    patch(childId, (node) => {
+      if (!isChat(node)) return {}
+      const last = node.data.messages[node.data.messages.length - 1]
+      if (!last || last.role !== 'assistant') return {}
+      return {
+        messages: [...node.data.messages.slice(0, -1), { ...last, text: last.text + event.text }]
+      }
+    })
+  } else if (event.type === 'childDone') {
+    const key = `${event.nodeId}:${event.toolUseId}`
+    const childId = researchChildren.get(key)
+    researchChildren.delete(key)
+    if (childId) {
+      patch(childId, () => ({ status: 'idle' }))
+      useCanvasStore.getState().persistThread(childId)
+      useCanvasStore.getState().persistSoon()
+    }
   } else if (event.type === 'note-content') {
     patch(event.nodeId, (node) => (isNote(node) ? { content: event.content } : {}))
   } else if (event.type === 'permission') {
@@ -757,6 +841,15 @@ window.api.thread.onEvent((event) => {
         : {}
     )
   } else if (event.type === 'done') {
+    // Safety sweep: a turn that errored or aborted mid-research leaves no
+    // childDone behind — settle any of this lead's still-streaming children.
+    for (const [key, childId] of researchChildren) {
+      if (key.startsWith(`${event.nodeId}:`)) {
+        researchChildren.delete(key)
+        patch(childId, () => ({ status: 'idle' }))
+        useCanvasStore.getState().persistThread(childId)
+      }
+    }
     patch(event.nodeId, (node) => {
       const warning = event.ok === false ? `\n\n⚠️ ${event.error ?? 'The agent run failed.'}` : ''
       if (isNote(node)) {

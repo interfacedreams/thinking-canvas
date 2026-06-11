@@ -94,7 +94,12 @@ function NoteEditor({
       editor={editor}
       className={readOnly ? 'text-neutral-500' : ''}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') onEscape()
+        if (e.key === 'Escape') {
+          onEscape()
+          // discard (above) unmounts the node; otherwise release typing focus
+          // so canvas shortcuts (C/N) work again
+          editor?.commands.blur()
+        }
       }}
       onClick={(e) => {
         const a = (e.target as HTMLElement).closest('a')

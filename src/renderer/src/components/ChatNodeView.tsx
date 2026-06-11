@@ -10,7 +10,7 @@ import {
 } from '@xyflow/react'
 import TextareaAutosize from 'react-textarea-autosize'
 import Markdown from 'react-markdown'
-import { Expand, GitFork, Minus, Pencil, Trash2 } from 'lucide-react'
+import { Expand, GitFork, Minus, Pencil, Telescope, Trash2 } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type ChatNode, type Message } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
@@ -48,6 +48,9 @@ function MessageView({
   return (
     <div data-msg={message.id} className="prose-chat mb-2 px-3 py-1">
       <Markdown>{message.text}</Markdown>
+      {pending && (
+        <div className="animate-pulse tracking-widest text-neutral-400">●●●</div>
+      )}
     </div>
   )
 }
@@ -58,6 +61,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
   const send = useCanvasStore((s) => s.send)
   const respondPermission = useCanvasStore((s) => s.respondPermission)
   const forkChat = useCanvasStore((s) => s.forkChat)
+  const toggleResearch = useCanvasStore((s) => s.toggleResearch)
   const requestDelete = useCanvasStore((s) => s.requestDelete)
   const discardNode = useCanvasStore((s) => s.discardNode)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
@@ -89,11 +93,12 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
   const stickToBottom = useRef(true)
   const streaming = data.status === 'streaming'
   const empty = data.messages.length === 0
+  // Researcher transcripts spawned by a research turn — display-only: they ran
+  // inside the lead's session, so there's nothing to reply to (and no composer).
+  const isResearch = data.kind === 'research'
   // Fork-ahead: forkable once the chat has a tip (a completed assistant reply).
-  // Forks themselves don't offer the button — only root chats fork.
-  const isFork = useCanvasStore((s) => s.edges.some((e) => e.target === id))
-  const canFork =
-    !isFork && !streaming && data.messages.some((m) => m.role === 'assistant' && m.uuid)
+  // Forks qualify too once their first turn lands — sessions chain freely.
+  const canFork = !streaming && data.messages.some((m) => m.role === 'assistant' && m.uuid)
 
   const palette = paletteFor(data.color)
 
@@ -171,8 +176,10 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
     if (el) el.scrollTop = el.scrollHeight
   }, [])
 
-  // Any upward wheel during streaming releases the auto-follow immediately.
-  useForwardedWheel(scrollRef, !empty && !data.minimized, () => {
+  // Scrolling the transcript requires focus (the node is selected by clicking
+  // it); otherwise the wheel pans the canvas. Any upward wheel during
+  // streaming releases the auto-follow immediately.
+  useForwardedWheel(scrollRef, !empty && !data.minimized, !!selected, () => {
     stickToBottom.current = false
   })
 
@@ -323,6 +330,9 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
             {data.title || 'New chat'}
           </span>
         )}
+        {data.minimized && streaming && (
+          <span className="shrink-0 animate-pulse tracking-widest text-neutral-400">●●●</span>
+        )}
         <div className="nodrag relative ml-auto flex shrink-0 items-center gap-1">
           {!data.minimized && (
             <button
@@ -355,14 +365,16 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
         </div>
       </div>
 
-      {!data.minimized && empty && <div className="min-h-0 flex-1" />}
+      {/* empty transcript area sized so a fresh chat matches a fresh note
+          (header + 172px reserved note body) */}
+      {!data.minimized && empty && <div className="min-h-[98px] flex-1" />}
 
       {!data.minimized && !empty && (
         <div className="nodrag mx-1 mt-3 flex min-h-0 flex-1 cursor-auto flex-col overflow-hidden">
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-y-auto pb-1 text-[16px] leading-relaxed text-neutral-900"
+            className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-1 text-[16px] leading-relaxed text-neutral-900"
           >
             {data.messages.map((m, i) => (
               <MessageView
@@ -382,7 +394,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
         />
       )}
 
-      {!data.minimized && (
+      {!data.minimized && !isResearch && (
         <div className="nodrag mx-1 mt-2 mb-1 shrink-0 cursor-auto rounded-[10px] bg-white/85 text-[16px]">
           <TextareaAutosize
             ref={textareaRef}
@@ -395,13 +407,26 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 if (canSend) send(id)
-              } else if (e.key === 'Escape' && empty && !data.draft) {
-                discardNode(id)
+              } else if (e.key === 'Escape') {
+                if (empty && !data.draft) discardNode(id)
+                else e.currentTarget.blur()
               }
             }}
             className="block w-full resize-none bg-transparent px-3 py-2 outline-none placeholder:text-neutral-400"
           />
-          <div className="flex items-center justify-end px-2 pb-1.5">
+          <div className="flex items-center justify-between px-2 pb-1.5">
+            <button
+              type="button"
+              onClick={() => toggleResearch(id)}
+              title="Research mode: spawn parallel web researchers for this message"
+              className={`rounded-md p-1 transition-colors ${
+                data.researchArmed
+                  ? 'bg-(--np-accent) text-white'
+                  : 'text-neutral-400 hover:text-neutral-600'
+              }`}
+            >
+              <Telescope className="h-5 w-5" />
+            </button>
             <button
               type="button"
               onClick={() => send(id)}

@@ -44,12 +44,17 @@ function registerRegion(el: HTMLElement): () => void {
 
 /**
  * Wheel routing for a scrollable region inside a React Flow node (the region
- * itself must carry the `nowheel` class). A scroll gesture that *begins* over
- * the region scrolls it; everything else is re-dispatched onto the canvas
- * pane: gestures latched elsewhere (a pan passing through), ⌘/ctrl+wheel and
- * pinch (canvas zoom), and any scroll the region can't absorb — no overflow,
- * or already at the edge — which pans the canvas so an off-screen node bottom
- * can be scrolled into view.
+ * itself must carry the `nowheel` class). Scrolling is focus-gated: only a
+ * *focused* node (clicked / selected) scrolls its own content — over an
+ * unfocused node every wheel pans the canvas, so reading the board never
+ * fights with reading a transcript.
+ *
+ * While focused, the wheel is captured by the region: vertical scrolls the
+ * transcript (stopping dead at the edges instead of slingshotting into a
+ * canvas pan), horizontal scrolls an overflowing child (e.g. a code block) if
+ * one is under the cursor. ⌘/ctrl+wheel and pinch always reach the canvas
+ * (zoom), as do gestures latched elsewhere (a pan passing through) and any
+ * wheel over a region with nothing to scroll.
  *
  * `enabled` should flip when the scroll element mounts/unmounts (the effect
  * can't see ref.current changes on its own). `onScrollUp` fires on upward
@@ -59,6 +64,7 @@ function registerRegion(el: HTMLElement): () => void {
 export function useForwardedWheel(
   ref: RefObject<HTMLDivElement | null>,
   enabled: boolean,
+  focused: boolean,
   onScrollUp?: () => void
 ): void {
   const onScrollUpRef = useRef(onScrollUp)
@@ -66,7 +72,6 @@ export function useForwardedWheel(
     onScrollUpRef.current = onScrollUp
   })
 
-  const lastInnerWheelAt = useRef(0)
   useEffect(() => {
     const el = ref.current
     if (!el || !enabled) return
@@ -88,6 +93,13 @@ export function useForwardedWheel(
           cancelable: true
         })
       )
+    }
+    // Swallow the event entirely: the focused region owns it but has nowhere
+    // to put it (at an edge, or sideways with no scrollable child) — it must
+    // not leak out as a canvas pan.
+    const consume = (e: WheelEvent): void => {
+      e.preventDefault()
+      e.stopPropagation()
     }
     // True if something between the wheel target and the region (e.g. an
     // overflowing code block) can still scroll horizontally in this direction.
@@ -113,6 +125,11 @@ export function useForwardedWheel(
         forwardToPane(e)
         return
       }
+      // Unfocused: the node is just furniture — every wheel pans the canvas.
+      if (!focused) {
+        forwardToPane(e)
+        return
+      }
       // Latched elsewhere: a gesture that began on the canvas (or another
       // node) stays a canvas pan even while this region is under the cursor.
       if (gestureOwner !== el) {
@@ -120,29 +137,27 @@ export function useForwardedWheel(
         return
       }
       if (e.deltaY < 0) onScrollUpRef.current?.()
-      // Mostly-horizontal: scroll an overflowing code block if one is under the
-      // cursor, otherwise pan the canvas — a sideways trackpad pan shouldn't die
-      // just because it drifted over a node.
+      // Mostly-horizontal: scroll an overflowing code block if one is under
+      // the cursor; otherwise the focused region just absorbs it.
       if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) {
-        if (!childCanScrollX(e)) forwardToPane(e)
+        if (!childCanScrollX(e)) consume(e)
         return
       }
       const canScroll = el.scrollHeight - el.clientHeight > 1
-      const atEdge =
-        e.deltaY < 0 ? el.scrollTop <= 0 : el.scrollHeight - el.scrollTop - el.clientHeight <= 1
-      if (canScroll && !atEdge) {
-        lastInnerWheelAt.current = performance.now()
+      if (!canScroll) {
+        // Nothing to scroll inside — panning is the only sensible response.
+        forwardToPane(e)
         return
       }
-      // At an edge, a fling that just landed here shouldn't slingshot into a
-      // canvas pan — only chain once the gesture that hit the edge has died down.
-      if (canScroll && performance.now() - lastInnerWheelAt.current < 200) return
-      forwardToPane(e)
+      const atEdge =
+        e.deltaY < 0 ? el.scrollTop <= 0 : el.scrollHeight - el.scrollTop - el.clientHeight <= 1
+      if (atEdge) consume(e)
+      // Otherwise fall through to the native scroll.
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => {
       el.removeEventListener('wheel', onWheel)
       unregister()
     }
-  }, [ref, enabled])
+  }, [ref, enabled, focused])
 }

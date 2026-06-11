@@ -13,7 +13,8 @@ import ChatNodeView from './ChatNodeView'
 import NoteNodeView from './NoteNodeView'
 import ForkEdge from './ForkEdge'
 import BeeIcon from './BeeIcon'
-import RepoChip from './RepoChip'
+import TopBar from './TopBar'
+import PlacementOverlay from './PlacementOverlay'
 import DeleteChatModal from './DeleteChatModal'
 import { useCanvasStore, NODE_W } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
@@ -26,13 +27,13 @@ function CanvasInner(): React.JSX.Element {
   const nodes = useCanvasStore((s) => s.nodes)
   const storeEdges = useCanvasStore((s) => s.edges)
   const loaded = useCanvasStore((s) => s.loaded)
-  const repo = useCanvasStore((s) => s.repo)
+  const folder = useCanvasStore((s) => s.folder)
   const onNodesChange = useCanvasStore((s) => s.onNodesChange)
   const addNodeAt = useCanvasStore((s) => s.addNodeAt)
   const addNoteAt = useCanvasStore((s) => s.addNoteAt)
   const setStoreViewport = useCanvasStore((s) => s.setViewport)
   const init = useCanvasStore((s) => s.init)
-  const chooseRepo = useCanvasStore((s) => s.chooseRepo)
+  const chooseFolder = useCanvasStore((s) => s.chooseFolder)
   const { setViewport, fitView, screenToFlowPosition } = useReactFlow()
   const spawn = useSpawn()
 
@@ -42,10 +43,10 @@ function CanvasInner(): React.JSX.Element {
     })
   }, [init, setViewport])
 
-  const handleChooseRepo = useCallback(async () => {
-    const vp = await chooseRepo()
+  const handleChooseFolder = useCallback(async () => {
+    const vp = await chooseFolder()
     if (vp) void setViewport(vp)
-  }, [chooseRepo, setViewport])
+  }, [chooseFolder, setViewport])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -88,57 +89,66 @@ function CanvasInner(): React.JSX.Element {
   )
 
   return (
-    <div className="h-screen w-screen bg-[#FBFAF4]">
-      {loaded && (
-        <ReactFlow
-          nodes={nodes}
-          edges={storeEdges.map((e) => ({
-            id: e.id,
-            source: e.source,
-            target: e.target,
-            type: 'fork',
-            data: { sourceMessageId: e.sourceMessageId },
-            // fork connectors take the parent chat's accent color
-            style: {
-              stroke: paletteFor(nodes.find((n) => n.id === e.source)?.data.color).accent,
-              strokeWidth: 3
-            },
-            focusable: false,
-            selectable: false
-          }))}
-          onNodesChange={onNodesChange}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          nodesConnectable={false}
-          minZoom={0.05}
-          maxZoom={2}
-          panOnScroll
-          zoomOnPinch
-          zoomOnDoubleClick={false}
-          deleteKeyCode={null}
-          onMoveEnd={(_, vp) => setStoreViewport(vp)}
-          onDoubleClick={handleDoubleClick}
-        >
-          <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E2DAC0" />
-        </ReactFlow>
-      )}
+    <div className="flex h-screen w-screen flex-col bg-[#FBFAF4]">
+      <TopBar />
 
-      {repo && !repo.current && (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-4">
-          <BeeIcon className="h-16 w-16" />
-          <p className="text-[15px] text-[#92690B]">Pick a repository to start a canvas</p>
-          <button
-            type="button"
-            onClick={() => void handleChooseRepo()}
-            className="cursor-pointer rounded-[14px] border border-[#EDD27E] bg-[#FEF3C7] px-4 py-2 text-[14px] font-medium text-[#92690B] shadow-lg transition-colors hover:bg-[#FDE68A] active:scale-95"
+      <div className="relative min-h-0 flex-1">
+        {loaded && (
+          <ReactFlow
+            nodes={nodes}
+            edges={storeEdges.map((e) => ({
+              id: e.id,
+              source: e.source,
+              target: e.target,
+              type: 'fork',
+              data: { sourceMessageId: e.sourceMessageId },
+              // fork connectors take the parent chat's accent color;
+              // researcher connectors are dashed to read as ephemeral spawns
+              style: {
+                stroke: paletteFor(nodes.find((n) => n.id === e.source)?.data.color).accent,
+                strokeWidth: 3,
+                ...(nodes.find((n) => n.id === e.target)?.data.kind === 'research'
+                  ? { strokeDasharray: '6 4' }
+                  : {})
+              },
+              focusable: false,
+              selectable: false
+            }))}
+            onNodesChange={onNodesChange}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            nodesConnectable={false}
+            minZoom={0.05}
+            maxZoom={2}
+            panOnScroll
+            zoomOnPinch
+            zoomOnDoubleClick={false}
+            deleteKeyCode={null}
+            onMoveEnd={(_, vp) => setStoreViewport(vp)}
+            onDoubleClick={handleDoubleClick}
           >
-            Open repo…
-          </button>
-        </div>
-      )}
+            <Background variant={BackgroundVariant.Dots} gap={24} size={1.5} color="#E2DAC0" />
+          </ReactFlow>
+        )}
 
-      <RepoChip />
-      <DeleteChatModal />
+        {loaded && <PlacementOverlay />}
+
+        {folder && !folder.current && (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-4">
+            <BeeIcon className="h-16 w-16" />
+            <p className="text-[15px] text-[#92690B]">Pick a folder to start a canvas</p>
+            <button
+              type="button"
+              onClick={() => void handleChooseFolder()}
+              className="cursor-pointer rounded-[14px] border border-[#EDD27E] bg-[#FEF3C7] px-4 py-2 text-[14px] font-medium text-[#92690B] shadow-lg transition-colors hover:bg-[#FDE68A] active:scale-95"
+            >
+              Open folder…
+            </button>
+          </div>
+        )}
+
+        <DeleteChatModal />
+      </div>
     </div>
   )
 }
