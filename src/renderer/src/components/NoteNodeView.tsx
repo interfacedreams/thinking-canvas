@@ -136,7 +136,7 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
           setCtxConnectSource(armed ? null : id)
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
-        style={ctxHandleStyle(palette.accent, 'bottom')}
+        style={ctxHandleStyle(palette.accent, 'bottom', 'square')}
       />
 
       {!data.minimized && (

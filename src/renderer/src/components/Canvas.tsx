@@ -19,9 +19,11 @@ import ContextEdge from './ContextEdge'
 import ContextConnectOverlay from './ContextConnectOverlay'
 import BeeIcon from './BeeIcon'
 import TopBar from './TopBar'
+import Sidebar from './Sidebar'
 import PlacementOverlay from './PlacementOverlay'
 import DeleteChatModal from './DeleteChatModal'
 import { useCanvasStore, NODE_W } from '../store/canvas'
+import type { ChosenFile } from '../../../shared/types'
 import { CTX_HANDLE_ID } from '../lib/nodeChrome'
 import { paletteFor } from '../lib/palette'
 import { useSpawn } from '../lib/useSpawn'
@@ -38,6 +40,7 @@ function CanvasInner(): React.JSX.Element {
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
   const addNodeAt = useCanvasStore((s) => s.addNodeAt)
   const addNoteAt = useCanvasStore((s) => s.addNoteAt)
+  const addDroppedFiles = useCanvasStore((s) => s.addDroppedFiles)
   const setStoreViewport = useCanvasStore((s) => s.setViewport)
   const init = useCanvasStore((s) => s.init)
   const chooseFolder = useCanvasStore((s) => s.chooseFolder)
@@ -95,6 +98,55 @@ function CanvasInner(): React.JSX.Element {
     [addContextEdge]
   )
 
+  // Electron's default for a dropped file is to navigate the window to it —
+  // block that everywhere (top bar, sidebar, modals), so a missed drop is a
+  // no-op instead of a blank window. Files only: text drags keep their native
+  // behavior (dropping selected text into a composer still inserts it).
+  useEffect(() => {
+    const block = (e: DragEvent): void => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault()
+    }
+    window.addEventListener('dragover', block)
+    window.addEventListener('drop', block)
+    return () => {
+      window.removeEventListener('dragover', block)
+      window.removeEventListener('drop', block)
+    }
+  }, [])
+
+  // Images and PDFs dragged in from the OS drop as file nodes right where
+  // they land — same vetting and placement as the picker, minus the dialog.
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      const files = Array.from(e.dataTransfer.files)
+      if (files.length === 0) return
+      e.preventDefault()
+      if (!useCanvasStore.getState().folder?.current) return
+      // Anchor like every other spawn: the cursor lands a couple rows into
+      // the header. addDroppedFiles centers each node's width on the point.
+      const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      void (async () => {
+        const picked = (
+          await Promise.all(
+            files.map((f) => {
+              // '' for path-less files (e.g. an image dragged from a browser)
+              const path = window.api.file.pathFor(f)
+              return path ? window.api.file.fromPath(path) : null
+            })
+          )
+        ).filter((c): c is ChosenFile => c !== null)
+        if (picked.length > 0) await addDroppedFiles({ x: p.x, y: p.y - 24 }, picked)
+      })()
+    },
+    [screenToFlowPosition, addDroppedFiles]
+  )
+
   // Double-click on empty canvas: spawn a chat right there, under the cursor
   // (a note with alt/option held).
   const handleDoubleClick = useCallback(
@@ -112,7 +164,7 @@ function CanvasInner(): React.JSX.Element {
     <div className="flex h-screen w-screen flex-col bg-[#FBFAF4]">
       <TopBar />
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1" onDragOver={handleDragOver} onDrop={handleDrop}>
         {loaded && (
           <ReactFlow
             nodes={nodes}
@@ -129,7 +181,12 @@ function CanvasInner(): React.JSX.Element {
                   targetHandle: CTX_HANDLE_ID,
                   type: 'context',
                   style: { stroke: accent, strokeWidth: 3 },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: accent, width: 14, height: 14 },
+                  markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                    color: accent,
+                    width: 14,
+                    height: 14
+                  },
                   focusable: false,
                   selectable: false
                 }
@@ -164,7 +221,9 @@ function CanvasInner(): React.JSX.Element {
             // tap-to-connect is ours (ContextConnectOverlay), not React Flow's
             connectOnClick={false}
             minZoom={0.05}
-            maxZoom={2}
+            // deep enough to read a PDF page's body text; PdfViewer
+            // re-rasterizes pages at the settled zoom so they stay crisp
+            maxZoom={4}
             panOnScroll
             zoomOnPinch
             zoomOnDoubleClick={false}
@@ -176,6 +235,8 @@ function CanvasInner(): React.JSX.Element {
             <ContextConnectOverlay />
           </ReactFlow>
         )}
+
+        {loaded && folder?.current && <Sidebar />}
 
         {loaded && <PlacementOverlay />}
 

@@ -4,7 +4,8 @@ import { DEFAULT_MODEL, MODEL_OPTIONS } from '../../../shared/types'
 import type {
   CanvasDoc,
   ChosenFile,
-  ContextImage,
+  ContextFile,
+  FileKind,
   FolderState,
   ForkRef,
   ModelId,
@@ -57,9 +58,13 @@ export interface ChatData {
   // no forking, no session of their own (they ran inside the lead's session).
   kind?: 'research'
   researchArmed?: boolean // composer toggle: the next send runs in research mode
-  // Image node ids whose bytes this chat's session has already seen — only
-  // newly connected images ride the next send as image blocks.
+  // File node ids (images and PDFs) whose bytes this chat's session has
+  // already seen — only newly connected files ride the next send as blocks.
+  // The name predates PDF support; kept for canvas.json compatibility.
   injectedImages?: string[]
+  // Epoch ms of the last content activity (send, turn settled, edit) —
+  // the sidebar lists nodes most-recent first by this.
+  updatedAt?: number
   [key: string]: unknown
 }
 
@@ -77,16 +82,19 @@ export interface NoteData {
   focusDraft?: boolean // autofocus the content editor when the node mounts
   lastUsage?: TurnUsage
   pendingPermission?: PermissionRequest
+  updatedAt?: number // see ChatData.updatedAt
   [key: string]: unknown
 }
 
 export interface FileData {
   title: string
   color?: string
-  file?: string // image path relative to the folder root; set once file:attach resolves
-  dataUrl?: string // image bytes; undefined renders a missing-image placeholder
+  kind?: FileKind // omitted means 'image' (nodes that predate PDFs)
+  file?: string // file path relative to the folder root; set once file:attach resolves
+  dataUrl?: string // image bytes; undefined renders a placeholder (PDFs never carry one)
   minimized: boolean
   savedHeight?: number
+  updatedAt?: number // never stamped (files don't sit in the sidebar); declared so CanvasNode data reads uniformly
   [key: string]: unknown
 }
 
@@ -99,23 +107,30 @@ export const isChat = (n: CanvasNode): n is ChatNode => n.type === 'chat'
 export const isNote = (n: CanvasNode): n is NoteNode => n.type === 'note'
 export const isFile = (n: CanvasNode): n is FileNode => n.type === 'file'
 
-// An image node's frame is explicit (width AND height) from birth so resizing
+// A file node's frame is explicit (width AND height) from birth so resizing
 // can keep the aspect ratio. The header band is part of that frame.
 export const FILE_HEADER_H = 49
 const MIN_FILE_W = 240
+// PDFs open as an inline pdf.js viewer — born at roughly one US-Letter page
+// (at 480 wide a page is ~620 tall), freely resizable since the pages scroll.
+export const PDF_FRAME = { width: 480, height: FILE_HEADER_H + 620 }
 
-/** A picked image plus its measured pixel size — placement-ghost state. */
+/** A picked file riding the placement ghost — images carry their measured
+ *  pixel size; PDFs place at the standard viewer frame. */
 export interface PendingFile extends ChosenFile {
-  naturalWidth: number
-  naturalHeight: number
+  naturalWidth?: number
+  naturalHeight?: number
 }
 
-/** Initial frame for an image: natural size, capped to the standard node
- *  width and max height (whichever bites first), aspect preserved. */
-export function fileFrame(pf: { naturalWidth: number; naturalHeight: number }): {
+/** Initial frame for a file node: an image's natural size, capped to the
+ *  standard node width and max height (whichever bites first), aspect
+ *  preserved — or the page-sized viewer frame when there's nothing to
+ *  measure (PDFs). */
+export function fileFrame(pf: { naturalWidth?: number; naturalHeight?: number }): {
   width: number
   height: number
 } {
+  if (!pf.naturalWidth || !pf.naturalHeight) return { ...PDF_FRAME }
   let width = Math.max(MIN_FILE_W, Math.min(NODE_W, pf.naturalWidth))
   let imgH = (width * pf.naturalHeight) / pf.naturalWidth
   const maxImg = MAX_NODE_H - FILE_HEADER_H
@@ -124,6 +139,16 @@ export function fileFrame(pf: { naturalWidth: number; naturalHeight: number }): 
     width = Math.max(MIN_FILE_W, Math.round((imgH * pf.naturalWidth) / pf.naturalHeight))
   }
   return { width, height: Math.round(imgH + FILE_HEADER_H) }
+}
+
+/** Decode an image data URL to its natural pixel size (null if undecodable). */
+function measureImage(dataUrl: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((resolveDims) => {
+    const img = new Image()
+    img.onload = () => resolveDims({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => resolveDims(null)
+    img.src = dataUrl
+  })
 }
 
 interface Rect {
@@ -279,6 +304,9 @@ interface CanvasState {
   addNodeAt: (position: { x: number; y: number }) => ChatNode
   addNoteAt: (position: { x: number; y: number }) => NoteNode
   addFileAt: (position: { x: number; y: number }) => FileNode | null
+  // OS drag-and-drop: place each dropped image/PDF as a file node centered on
+  // the drop point (cascading when several arrive together) and attach it.
+  addDroppedFiles: (point: { x: number; y: number }, picked: ChosenFile[]) => Promise<void>
   clearFocusDraft: (id: string) => void
   setDraft: (id: string, draft: string) => void
   setColor: (id: string, color: string) => void
@@ -317,9 +345,10 @@ const noteSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // Researchers streaming right now: `${leadNodeId}:${toolUseId}` → child node id.
 // Mid-turn only, so it lives outside the store (no re-renders, never persisted).
 const researchChildren = new Map<string, string>()
-// Image ids riding the in-flight turn as image blocks, per chat node. Marked
-// injected only when the turn lands ok — a failed turn re-sends them on retry.
-const pendingImageInjections = new Map<string, string[]>()
+// File ids riding the in-flight turn as image/document blocks, per chat node.
+// Marked injected only when the turn lands ok — a failed turn re-sends them
+// on retry.
+const pendingFileInjections = new Map<string, string[]>()
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   const patchData = (id: string, patch: Record<string, unknown>): void => {
@@ -349,6 +378,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           width: n.width ?? NODE_W,
           ...(height != null ? { height } : {}),
           title: n.data.title,
+          ...(n.data.updatedAt != null ? { updatedAt: n.data.updatedAt } : {}),
           ...(n.data.color ? { color: n.data.color } : {}),
           ...(n.data.minimized ? { minimized: true } : {}),
           ...(!isFile(n) && n.data.sessionId ? { sessionId: n.data.sessionId } : {}),
@@ -441,16 +471,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           : []
       })
 
-  // Images wired to a chat go along as paths; main injects the bytes of any
+  // Files wired to a chat go along as paths; main injects the bytes of any
   // the session hasn't seen (isNew, stamped by send/retry) into the turn's
-  // user message. An image whose attach hasn't landed yet (no path) sits out.
-  const contextImagesFor = (id: string): ContextImage[] =>
+  // user message. A file whose attach hasn't landed yet (no path) sits out.
+  const contextFilesFor = (id: string): ContextFile[] =>
     get()
       .edges.filter((e) => e.kind === 'context' && e.target === id)
       .flatMap((e) => {
         const src = get().nodes.find((n) => n.id === e.source)
         return src && isFile(src) && src.data.file
-          ? [{ id: src.id, title: src.data.title || 'Untitled image', file: src.data.file }]
+          ? [
+              {
+                id: src.id,
+                title:
+                  src.data.title || (src.data.kind === 'pdf' ? 'Untitled PDF' : 'Untitled image'),
+                file: src.data.file
+              }
+            ]
           : []
       })
 
@@ -469,11 +506,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   // most recently created node's (the first one on a canvas gets butter).
   const nextColor = (): string => nextColorId(get().nodes[get().nodes.length - 1]?.data.color)
 
+  // Materialize a file node at a top-left position and make the file part of
+  // the folder (copy in, or reference in place) — the relative path from
+  // file:attach is what survives a reload.
+  const placeFile = (position: { x: number; y: number }, pf: PendingFile): FileNode => {
+    const node = adopt(
+      makeFileNode(position, fileFrame(pf), {
+        title: pf.name.replace(/\.[^.]+$/, ''), // the original file name, sans extension
+        color: nextColor(),
+        kind: pf.kind,
+        ...(pf.dataUrl ? { dataUrl: pf.dataUrl } : {})
+      })
+    )
+    void window.api.file.attach(pf.sourcePath).then((res) => {
+      if (res) {
+        patchData(node.id, { file: res.file })
+        persist()
+      }
+    })
+    return node
+  }
+
   const spawnNode = (position: { x: number; y: number }): ChatNode =>
-    adopt(makeNode(position, { focusDraft: true, color: nextColor() }))
+    adopt(makeNode(position, { focusDraft: true, color: nextColor(), updatedAt: Date.now() }))
 
   const spawnNote = (position: { x: number; y: number }): NoteNode => {
-    const node = adopt(makeNoteNode(position, { focusDraft: true, color: nextColor() }))
+    const node = adopt(
+      makeNoteNode(position, { focusDraft: true, color: nextColor(), updatedAt: Date.now() })
+    )
     // The note's file exists from the moment the node does — main allocates
     // a unique "Untitled" filename at the folder root.
     void window.api.note.create(node.id)
@@ -500,13 +560,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     startFilePlacement: async () => {
       const picked = await window.api.file.choose()
       if (!picked) return
+      // PDFs place as a fixed card — nothing to measure.
+      if (picked.kind === 'pdf' || !picked.dataUrl) {
+        set({ placing: 'file', pendingFile: picked })
+        return
+      }
       // Measure the image before placing — the node's frame comes from it.
-      const dims = await new Promise<{ w: number; h: number } | null>((resolveDims) => {
-        const img = new Image()
-        img.onload = () => resolveDims({ w: img.naturalWidth, h: img.naturalHeight })
-        img.onerror = () => resolveDims(null)
-        img.src = picked.dataUrl
-      })
+      const dims = await measureImage(picked.dataUrl)
       if (!dims || dims.w === 0 || dims.h === 0) return
       set({
         placing: 'file',
@@ -537,7 +597,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         const node = byId.get(nodeId)
         if (node && isNote(node)) void window.api.note.delete(nodeId)
         else if (node && isFile(node)) {
-          // the image file stays in the folder — the node is just a pin
+          // the file stays in the folder — the node is just a pin
         } else void window.api.canvas.deleteThread(nodeId)
       }
       persist()
@@ -595,23 +655,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     addFileAt: (position) => {
       const pf = get().pendingFile
       if (!pf) return null
-      const node = adopt(
-        makeFileNode(position, fileFrame(pf), {
-          title: pf.name.replace(/\.[^.]+$/, ''), // the original file name, sans extension
-          color: nextColor(),
-          dataUrl: pf.dataUrl
-        })
-      )
+      const node = placeFile(position, pf)
       set({ pendingFile: null })
-      // Make the image part of the folder (copy in, or reference in place) —
-      // the relative path is what survives a reload.
-      void window.api.file.attach(pf.sourcePath).then((res) => {
-        if (res) {
-          patchData(node.id, { file: res.file })
-          persist()
-        }
-      })
       return node
+    },
+
+    addDroppedFiles: async (point, picked) => {
+      let offset = 0
+      for (const chosen of picked) {
+        const pf: PendingFile = { ...chosen }
+        if (pf.dataUrl) {
+          // The node's frame comes from the image's natural size.
+          const dims = await measureImage(pf.dataUrl)
+          if (!dims || dims.w === 0 || dims.h === 0) continue
+          pf.naturalWidth = dims.w
+          pf.naturalHeight = dims.h
+        }
+        const { width } = fileFrame(pf)
+        placeFile({ x: point.x - width / 2 + offset, y: point.y + offset }, pf)
+        offset += 48
+      }
     },
 
     clearFocusDraft: (id) => patchData(id, { focusDraft: undefined }),
@@ -645,10 +708,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       set((s) => ({
         nodes: s.nodes.map((n) =>
           n.id === id
-            ? ({ ...n, height: undefined, data: { ...n.data, content, growthCap } } as CanvasNode)
+            ? ({
+                ...n,
+                height: undefined,
+                data: { ...n.data, content, growthCap, updatedAt: Date.now() }
+              } as CanvasNode)
             : n
         )
       }))
+      persist() // updatedAt must survive a reload — content itself saves via note.save below
       const timer = noteSaveTimers.get(id)
       if (timer) clearTimeout(timer)
       noteSaveTimers.set(
@@ -701,9 +769,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         status: 'idle',
         growthCap: parent.data.growthCap,
         focusDraft: true,
+        updatedAt: Date.now(),
         forkOf: { sessionId, messageUuid: anchor.uuid },
         // the forked session inherits the parent's transcript — and with it,
-        // any images already injected there
+        // any files already injected there
         injectedImages: parent.data.injectedImages
       })
       const edge: PersistedEdge = {
@@ -750,7 +819,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           title: wanted,
           color: parent.data.color,
           status: 'streaming',
-          growthCap: viewportFitHeight(get().viewport.zoom)
+          growthCap: viewportFitHeight(get().viewport.zoom),
+          updatedAt: Date.now()
         }
       )
       set((s) => ({ nodes: [...s.nodes, node] }))
@@ -804,7 +874,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
       if (node && isNote(node)) void window.api.note.delete(id)
       else if (node && isFile(node)) {
-        // the image file stays in the folder
+        // the file stays in the folder
       } else void window.api.canvas.deleteThread(id)
       persist()
     },
@@ -856,6 +926,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   draft: '',
                   status: 'streaming' as const,
                   growthCap,
+                  updatedAt: Date.now(),
                   lastError: undefined, // a fresh send supersedes any failed turn
                   title: node.data.title || text.slice(0, 60),
                   researchArmed: false // one-shot: research applies to this send only
@@ -868,16 +939,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persistThread(id) // the user message is part of the durable transcript now
 
       const contextNotes = contextNotesFor(id)
-      // Only images the session hasn't seen carry bytes this turn; remember
+      // Only files the session hasn't seen carry bytes this turn; remember
       // them so a successful turn marks them injected.
       const injected = new Set(node.data.injectedImages ?? [])
-      const contextImages = contextImagesFor(id).map((img) => ({
-        ...img,
-        isNew: !injected.has(img.id)
+      const contextFiles = contextFilesFor(id).map((f) => ({
+        ...f,
+        isNew: !injected.has(f.id)
       }))
-      const newImageIds = contextImages.filter((i) => i.isNew).map((i) => i.id)
-      if (newImageIds.length > 0) pendingImageInjections.set(id, newImageIds)
-      else pendingImageInjections.delete(id)
+      const newFileIds = contextFiles.filter((f) => f.isNew).map((f) => f.id)
+      if (newFileIds.length > 0) pendingFileInjections.set(id, newFileIds)
+      else pendingFileInjections.delete(id)
 
       void window.api.thread.send({
         nodeId: id,
@@ -888,7 +959,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
         ...(node.data.researchArmed ? { research: true } : {}),
         ...(contextNotes.length > 0 ? { contextNotes } : {}),
-        ...(contextImages.length > 0 ? { contextImages } : {})
+        ...(contextFiles.length > 0 ? { contextFiles } : {})
       })
     },
 
@@ -921,6 +992,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   messages,
                   status: 'streaming' as const,
                   growthCap,
+                  updatedAt: Date.now(),
                   lastError: undefined
                 }
               } as CanvasNode)
@@ -930,13 +1002,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       const contextNotes = contextNotesFor(id)
       const injected = new Set(node.data.injectedImages ?? [])
-      const contextImages = contextImagesFor(id).map((img) => ({
-        ...img,
-        isNew: !injected.has(img.id)
+      const contextFiles = contextFilesFor(id).map((f) => ({
+        ...f,
+        isNew: !injected.has(f.id)
       }))
-      const newImageIds = contextImages.filter((i) => i.isNew).map((i) => i.id)
-      if (newImageIds.length > 0) pendingImageInjections.set(id, newImageIds)
-      else pendingImageInjections.delete(id)
+      const newFileIds = contextFiles.filter((f) => f.isNew).map((f) => f.id)
+      if (newFileIds.length > 0) pendingFileInjections.set(id, newFileIds)
+      else pendingFileInjections.delete(id)
       void window.api.thread.send({
         nodeId: id,
         text: lastUser.text,
@@ -945,7 +1017,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         // the failed turn may have been a fork's first send — fork again
         ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
         ...(contextNotes.length > 0 ? { contextNotes } : {}),
-        ...(contextImages.length > 0 ? { contextImages } : {})
+        ...(contextFiles.length > 0 ? { contextFiles } : {})
       })
     },
 
@@ -968,7 +1040,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   draft: '',
                   status: 'streaming' as const,
                   lastReply: '',
-                  growthCap
+                  growthCap,
+                  updatedAt: Date.now()
                 }
               } as CanvasNode)
             : n
@@ -1006,7 +1079,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
           const savedHeight = p.minimized && p.height != null ? Math.min(p.height, cap) : undefined
           if (p.kind === 'file') {
-            // Image frames are explicit and aspect-true — no screen-fit clamp.
+            // File frames are explicit and aspect-true — no screen-fit clamp.
             return {
               ...makeFileNode(
                 p.position,
@@ -1017,6 +1090,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                 {
                   title: p.title,
                   color: p.color,
+                  kind: p.file?.toLowerCase().endsWith('.pdf')
+                    ? ('pdf' as const)
+                    : ('image' as const),
                   file: p.file,
                   dataUrl: p.dataUrl,
                   minimized: p.minimized ?? false,
@@ -1036,7 +1112,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                 minimized: p.minimized ?? false,
                 savedHeight,
                 growthCap: cap,
-                sessionId: p.sessionId
+                sessionId: p.sessionId,
+                updatedAt: p.updatedAt
               }),
               ...frame
             }
@@ -1053,6 +1130,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
               sessionId: p.sessionId,
               forkOf: p.forkOf,
               injectedImages: p.injectedImages,
+              updatedAt: p.updatedAt,
               ...(p.kind === 'research' ? { kind: 'research' as const } : {})
             }),
             ...frame
@@ -1169,16 +1247,17 @@ window.api.thread.onEvent((event) => {
         useCanvasStore.getState().persistThread(childId)
       }
     }
-    // Images that rode this turn are in the session now (only if it landed —
-    // a failed turn's images go again on retry).
-    const injectedNow = event.ok ? pendingImageInjections.get(event.nodeId) : undefined
-    pendingImageInjections.delete(event.nodeId)
+    // Files that rode this turn are in the session now (only if it landed —
+    // a failed turn's files go again on retry).
+    const injectedNow = event.ok ? pendingFileInjections.get(event.nodeId) : undefined
+    pendingFileInjections.delete(event.nodeId)
     patch(event.nodeId, (node) => {
       if (isNote(node)) {
         const warning = event.ok === false ? `\n\n⚠️ ${event.error ?? 'The agent run failed.'}` : ''
         return {
           status: 'idle',
           pendingPermission: undefined,
+          updatedAt: Date.now(),
           ...(event.usage ? { lastUsage: event.usage } : {}),
           // adopt the turn's settled content
           ...(event.note ? { content: event.note.content } : {}),
@@ -1204,6 +1283,7 @@ window.api.thread.onEvent((event) => {
         status: 'idle',
         lastError: undefined,
         pendingPermission: undefined, // safety net if the turn dies mid-prompt
+        updatedAt: Date.now(),
         ...(event.usage ? { lastUsage: event.usage } : {}),
         ...(injectedNow?.length
           ? {
@@ -1221,8 +1301,8 @@ window.api.thread.onEvent((event) => {
       }
     })
     useCanvasStore.getState().persistThread(event.nodeId)
-    // injectedImages round-trips through canvas.json — make the mark durable.
-    if (injectedNow?.length) useCanvasStore.getState().persistSoon()
+    // updatedAt (and injectedImages) round-trip through canvas.json — make them durable.
+    useCanvasStore.getState().persistSoon()
 
     // First successful exchange still wearing its send-time stub (the opening
     // message's first 60 chars): swap in a real title from a one-shot Haiku

@@ -28,6 +28,7 @@
     "@tiptap/starter-kit": "^3.26.0",
     "@xyflow/react": "^12.11.0",
     "lucide-react": "^1.17.0",
+    "pdfjs-dist": "^6.0.227",
     "react-markdown": "^10.1.0",
     "react-textarea-autosize": "^8.5.9",
     "zustand": "^5.0.14"

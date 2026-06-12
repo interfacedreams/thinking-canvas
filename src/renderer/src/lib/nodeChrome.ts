@@ -10,23 +10,26 @@ export const CHIP_BUTTON =
 // Interactive children opt out with `nodrag` (CHIP_BUTTON includes it).
 export const DRAG_HEADER = 'drag-handle cursor-grab active:cursor-grabbing'
 
-// The context connector: the grabbable circle floating just outside every
+// The context connector: the grabbable shape floating just outside every
 // note and image (below them) and chat (above it) — so a source sitting above
 // a chat reads as a clean downward flow. Notes and images drag from theirs;
 // chats receive. One id serves all since handle ids are scoped per node.
+// Notes wear a square, everything else a circle — the same shape coding the
+// sidebar list uses.
 export const CTX_HANDLE_ID = 'ctx'
 
 // Sizing/placement is inline because React Flow's stylesheet pins handles to
 // a 6px dot; hover/snap effects live in main.css under .ctx-handle.
 export const ctxHandleStyle = (
   accent: string,
-  side: 'top' | 'bottom' = 'top'
+  side: 'top' | 'bottom' = 'top',
+  shape: 'circle' | 'square' = 'circle'
 ): React.CSSProperties => ({
   ...(side === 'top' ? { top: -15 } : { bottom: -15 }),
   left: '50%',
   width: 24,
   height: 24,
-  borderRadius: '50%',
+  borderRadius: shape === 'circle' ? '50%' : 6,
   background: accent,
   border: '2px solid #FFFFFF',
   boxShadow: '0 1px 4px rgba(0, 0, 0, 0.2)'

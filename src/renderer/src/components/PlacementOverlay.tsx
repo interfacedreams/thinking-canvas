@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useReactFlow, useViewport } from '@xyflow/react'
+import { FileText } from 'lucide-react'
 import { useCanvasStore, fileFrame, FILE_HEADER_H, NODE_W, type PendingFile } from '../store/canvas'
 import { nextColorId, paletteFor, type NodePalette } from '../lib/palette'
 
@@ -67,8 +68,8 @@ function ArmedOverlay({
     return () => window.removeEventListener('keydown', onKey)
   }, [setPlacing])
 
-  // Images carry their own frame (natural size, capped); chats and notes
-  // share the standard node width.
+  // Files carry their own frame (an image's natural size, capped; PDFs the
+  // fixed card); chats and notes share the standard node width.
   const ghostW = placing === 'file' && pendingFile ? fileFrame(pendingFile).width : NODE_W
 
   const place = (e: React.MouseEvent): void => {
@@ -171,7 +172,7 @@ function ArmedOverlay({
               </div>
             </div>
 
-            {isFile ? (
+            {isFile && pendingFile!.dataUrl ? (
               // the image itself, at exactly the size the node will land at
               <img
                 src={pendingFile!.dataUrl}
@@ -180,6 +181,23 @@ function ArmedOverlay({
                 className="w-full rounded-b-[13px] object-contain"
                 style={{ height: fileFrame(pendingFile!).height - FILE_HEADER_H }}
               />
+            ) : isFile ? (
+              // PDF: the viewer's gutter with a blank first page, at the size
+              // the node will land at
+              <div
+                className="w-full rounded-b-[13px] bg-neutral-200/60 p-[10px]"
+                style={{ height: fileFrame(pendingFile!).height - FILE_HEADER_H }}
+              >
+                <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-white/90 shadow-sm">
+                  <FileText className="h-10 w-10 opacity-40" style={{ color: pal.deep }} />
+                  <span
+                    className="max-w-full truncate px-3 text-[15px] opacity-60"
+                    style={{ color: pal.deep }}
+                  >
+                    {pendingFile!.name}
+                  </span>
+                </div>
+              </div>
             ) : isNote ? (
               // body mirrors NoteEditor's reserved blank-note height
               <div className="mx-1 my-1 pb-1">

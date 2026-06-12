@@ -5,8 +5,8 @@ import { useCanvasStore } from '../store/canvas'
  * Arm placement mode for a chat, note, or file: a ghost node sticks to the
  * cursor and the next canvas click places it (PlacementOverlay handles that
  * part). Re-arming the same kind disarms — the buttons and C / N / F keys
- * toggle. Files first detour through the image picker; the ghost arms only
- * once something was actually picked.
+ * toggle. Files first detour through the image/PDF picker; the ghost arms
+ * only once something was actually picked.
  */
 export function useSpawn(): (kind: 'chat' | 'note' | 'file') => void {
   const setPlacing = useCanvasStore((s) => s.setPlacing)

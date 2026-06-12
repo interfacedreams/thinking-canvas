@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
   CanvasDoc,
@@ -35,8 +35,16 @@ const api = {
   },
   file: {
     choose: (): Promise<ChosenFile | null> => ipcRenderer.invoke('file:choose'),
+    // Absolute path of a File dragged in from the OS ('' when it has none,
+    // e.g. an image dragged out of a browser). File.path is gone in modern
+    // Electron; webUtils is the sanctioned bridge.
+    pathFor: (file: File): string => webUtils.getPathForFile(file),
+    fromPath: (path: string): Promise<ChosenFile | null> =>
+      ipcRenderer.invoke('file:fromPath', path),
     attach: (sourcePath: string): Promise<{ file: string } | null> =>
-      ipcRenderer.invoke('file:attach', sourcePath)
+      ipcRenderer.invoke('file:attach', sourcePath),
+    // PDF bytes for the inline viewer; Buffers arrive here as Uint8Array.
+    pdfData: (rel: string): Promise<Uint8Array | null> => ipcRenderer.invoke('file:pdfData', rel)
   },
   thread: {
     send: (args: ThreadSendArgs): Promise<void> => ipcRenderer.invoke('thread:send', args),

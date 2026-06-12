@@ -158,19 +158,31 @@ async function readTextIfExists(path: string): Promise<string> {
 }
 
 // --- File nodes -----------------------------------------------------------
-// An image node references a file inside the folder by relative path. Picking
-// a file outside the folder copies it to the root; one already inside is
-// referenced where it sits. Deleting a node never deletes the image file.
+// A file node references an image or PDF inside the folder by relative path.
+// Picking a file outside the folder copies it to the root; one already inside
+// is referenced where it sits. Deleting a node never deletes the file.
 
 type ImageMime = 'image/png' | 'image/jpeg'
-const IMAGE_MIME: Record<string, ImageMime> = {
+type PdfMime = 'application/pdf'
+type FileMime = ImageMime | PdfMime
+const FILE_MIME: Record<string, FileMime> = {
   png: 'image/png',
   jpg: 'image/jpeg',
-  jpeg: 'image/jpeg'
+  jpeg: 'image/jpeg',
+  pdf: 'application/pdf'
 }
 
-const imageMimeFor = (file: string): ImageMime | null =>
-  IMAGE_MIME[extname(file).slice(1).toLowerCase()] ?? null
+const fileMimeFor = (file: string): FileMime | null =>
+  FILE_MIME[extname(file).slice(1).toLowerCase()] ?? null
+
+const imageMimeFor = (file: string): ImageMime | null => {
+  const mime = fileMimeFor(file)
+  return mime && mime !== 'application/pdf' ? mime : null
+}
+
+// The API caps the whole request at 32 MB, and base64 inflates by a third —
+// past this a PDF can't reach the model, so refuse it at pick time.
+const MAX_PDF_BYTES = 20 * 1024 * 1024
 
 // File-node paths round-trip through canvas.json — accept only relative
 // paths that stay inside the root, with no hidden or parent segments.
@@ -190,50 +202,84 @@ async function imageDataUrl(root: string, rel: string): Promise<string | undefin
   }
 }
 
+// Describe a pickable file for the renderer: images carry preview bytes as a
+// data URL so they can be measured before placing; PDFs travel as a path only
+// (their bytes never enter the renderer), size-capped so they can reach the
+// model. Null for unsupported, oversized, or unreadable files.
+async function chosenFileFor(path: string): Promise<ChosenFile | null> {
+  const mime = fileMimeFor(path)
+  if (!mime) return null
+  try {
+    if (mime === 'application/pdf') {
+      if ((await fs.stat(path)).size > MAX_PDF_BYTES) {
+        console.warn(`[file] PDF over ${MAX_PDF_BYTES / 1024 / 1024}MB refused: ${path}`)
+        return null
+      }
+      return { sourcePath: path, name: basename(path), kind: 'pdf' }
+    }
+    const buf = await fs.readFile(path)
+    return {
+      sourcePath: path,
+      name: basename(path),
+      kind: 'image',
+      dataUrl: `data:${mime};base64,${buf.toString('base64')}`
+    }
+  } catch {
+    return null
+  }
+}
+
 function registerFileIpc(): void {
-  // Pick an image. Returns the source path (attached on placement) plus a
-  // data URL so the renderer can preview and measure it before placing.
+  // Pick an image or PDF via the open dialog.
   ipcMain.handle('file:choose', async (event): Promise<ChosenFile | null> => {
     if (!folderRoot) return null
     const win = BrowserWindow.fromWebContents(event.sender)
     const options = {
-      title: 'Add an image',
+      title: 'Add an image or PDF',
       properties: ['openFile' as const],
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }]
+      filters: [{ name: 'Images & PDFs', extensions: ['png', 'jpg', 'jpeg', 'pdf'] }]
     }
     const res = win
       ? await dialog.showOpenDialog(win, options)
       : await dialog.showOpenDialog(options)
     if (res.canceled || res.filePaths.length === 0) return null
-    const path = res.filePaths[0]
-    const mime = imageMimeFor(path)
-    if (!mime) return null
+    return chosenFileFor(res.filePaths[0])
+  })
+
+  // A file dragged in from the OS — same description (and same vetting) as a
+  // picked one, from the drop's absolute path.
+  ipcMain.handle('file:fromPath', async (_event, path: string): Promise<ChosenFile | null> => {
+    if (!folderRoot || typeof path !== 'string' || !isAbsolute(path)) return null
+    return chosenFileFor(path)
+  })
+
+  // Bytes for the renderer's inline PDF viewer (pdf.js renders pages onto
+  // canvases). PDFs only — image previews already travel as data URLs.
+  ipcMain.handle('file:pdfData', async (_event, rel: string): Promise<Uint8Array | null> => {
+    const root = folderRoot
+    if (!root || typeof rel !== 'string' || !isSafeFileRel(rel)) return null
+    if (fileMimeFor(rel) !== 'application/pdf') return null
     try {
-      const buf = await fs.readFile(path)
-      return {
-        sourcePath: path,
-        name: basename(path),
-        dataUrl: `data:${mime};base64,${buf.toString('base64')}`
-      }
+      return await fs.readFile(join(root, rel))
     } catch {
-      return null
+      return null // moved or deleted — the node renders its missing-file card
     }
   })
 
-  // The node was placed — make the image part of the folder. Inside the root
+  // The node was placed — make the file part of the folder. Inside the root
   // it's referenced in place; outside, copied in under a free name.
   ipcMain.handle(
     'file:attach',
     async (_event, sourcePath: string): Promise<{ file: string } | null> => {
       const root = folderRoot
-      if (!root || typeof sourcePath !== 'string' || !imageMimeFor(sourcePath)) return null
+      if (!root || typeof sourcePath !== 'string' || !fileMimeFor(sourcePath)) return null
       const src = resolve(sourcePath)
       const rel = relative(root, src)
       if (!rel.startsWith('..') && !isAbsolute(rel)) {
         return isSafeFileRel(rel) ? { file: rel } : null
       }
       const ext = extname(src)
-      const base = sanitizeTitle(basename(src, ext)) || 'image'
+      const base = sanitizeTitle(basename(src, ext)) || 'file'
       try {
         for (let n = 1; n <= 200; n++) {
           const file = n === 1 ? `${base}${ext}` : `${base} ${n}${ext}`
@@ -412,7 +458,7 @@ function registerThreadIpc(): void {
         research,
         model,
         contextNotes,
-        contextImages
+        contextFiles
       }: ThreadSendArgs
     ) => {
       // The renderer sends an id from MODEL_OPTIONS; anything else falls back.
@@ -475,23 +521,26 @@ function registerThreadIpc(): void {
                 })
                 .join('\n')
             : ''
-        // Connected images live IN the conversation, not the system prompt
-        // (the API's system prompt is text-only): an image newly connected
-        // since the session last saw it rides this turn's user message as a
-        // real image block — once. Later turns resume the session, which
-        // already holds the pixels, so the system prompt only lists titles.
-        const validImages = (contextImages ?? []).filter(
-          (img) => typeof img.file === 'string' && isSafeFileRel(img.file)
+        // Connected files (images and PDFs) live IN the conversation, not the
+        // system prompt (the API's system prompt is text-only): a file newly
+        // connected since the session last saw it rides this turn's user
+        // message as a real image/document block — once. Later turns resume
+        // the session, which already holds the bytes, so the system prompt
+        // only lists titles. PDFs arrive as document blocks; the API renders
+        // each page as an image plus its extracted text, so the model sees
+        // layout and charts as well as the words.
+        const validFiles = (contextFiles ?? []).filter(
+          (f) => typeof f.file === 'string' && isSafeFileRel(f.file)
         )
-        const imagesAppend =
-          validImages.length > 0
-            ? 'The user attached images to this conversation: ' +
-              validImages.map((img) => JSON.stringify(img.title)).join(', ') +
-              '. They are included as image attachments inside the conversation ' +
+        const filesAppend =
+          validFiles.length > 0
+            ? 'The user attached files (images or PDF documents) to this conversation: ' +
+              validFiles.map((f) => JSON.stringify(f.title)).join(', ') +
+              '. They are included as attachments inside the conversation ' +
               'messages themselves — answer from what you see in them. Never try ' +
               'to read them from disk or search the project for them.'
             : ''
-        const systemAppend = [contextAppend, imagesAppend, research ? RESEARCH_APPEND : '']
+        const systemAppend = [contextAppend, filesAppend, research ? RESEARCH_APPEND : '']
           .filter(Boolean)
           .join('\n\n')
 
@@ -503,37 +552,43 @@ function registerThreadIpc(): void {
             `\n\nInstruction: ${text}`
           : text
 
-        // Bytes for the images this turn introduces, each behind a title label
+        // Bytes for the files this turn introduces, each behind a title label
         // so the model can tell which attachment is which.
-        const imageBlocks: Array<
+        const fileBlocks: Array<
           | { type: 'text'; text: string }
           | { type: 'image'; source: { type: 'base64'; media_type: ImageMime; data: string } }
+          | { type: 'document'; source: { type: 'base64'; media_type: PdfMime; data: string } }
         > = []
-        for (const img of notePath ? [] : validImages.filter((i) => i.isNew)) {
-          const mime = imageMimeFor(img.file)
+        for (const f of notePath ? [] : validFiles.filter((i) => i.isNew)) {
+          const mime = fileMimeFor(f.file)
           if (!mime) continue
           try {
-            const data = await fs.readFile(join(root, img.file))
-            imageBlocks.push({ type: 'text', text: `Attached image: ${JSON.stringify(img.title)}` })
-            imageBlocks.push({
-              type: 'image',
-              source: { type: 'base64', media_type: mime, data: data.toString('base64') }
-            })
+            const data = (await fs.readFile(join(root, f.file))).toString('base64')
+            if (mime === 'application/pdf') {
+              fileBlocks.push({ type: 'text', text: `Attached PDF: ${JSON.stringify(f.title)}` })
+              fileBlocks.push({
+                type: 'document',
+                source: { type: 'base64', media_type: mime, data }
+              })
+            } else {
+              fileBlocks.push({ type: 'text', text: `Attached image: ${JSON.stringify(f.title)}` })
+              fileBlocks.push({ type: 'image', source: { type: 'base64', media_type: mime, data } })
+            }
           } catch {
             // unreadable — it stays listed in the system prompt; the model can say so
           }
         }
 
-        // String prompts can't carry image blocks — when this turn injects
-        // images, hand the SDK a one-message input stream instead.
+        // String prompts can't carry image/document blocks — when this turn
+        // injects files, hand the SDK a one-message input stream instead.
         const promptInput =
-          imageBlocks.length > 0
+          fileBlocks.length > 0
             ? (async function* (): AsyncGenerator<SDKUserMessage> {
                 yield {
                   type: 'user',
                   message: {
                     role: 'user',
-                    content: [...imageBlocks, { type: 'text', text: prompt }]
+                    content: [...fileBlocks, { type: 'text', text: prompt }]
                   },
                   parent_tool_use_id: null,
                   session_id: '' // stamped by the SDK
@@ -854,6 +909,16 @@ function registerCanvasIpc(): void {
         migrated = true
       }
       if (migrated) await writeCanvasFile(root, doc)
+      // Nodes that predate updatedAt borrow their backing file's mtime so
+      // the sidebar's recency order is right from the first load; the next
+      // canvas save makes the stamp durable.
+      const mtimeOf = async (path: string): Promise<number | undefined> => {
+        try {
+          return Math.round((await fs.stat(path)).mtimeMs)
+        } catch {
+          return undefined
+        }
+      }
       // Transcripts and note contents live one file per node — rejoin them.
       await Promise.all(
         doc.nodes.map(async (node) => {
@@ -867,6 +932,7 @@ function registerCanvasIpc(): void {
           if (node.kind === 'note') {
             const path = notePathFor(root, node.id)
             node.content = path ? await readTextIfExists(path) : ''
+            if (node.updatedAt == null && path) node.updatedAt = await mtimeOf(path)
             return
           }
           try {
@@ -874,6 +940,9 @@ function registerCanvasIpc(): void {
               await fs.readFile(threadFileFor(root, node.id), 'utf8')
             )
             node.messages = thread.messages
+            if (node.updatedAt == null) {
+              node.updatedAt = await mtimeOf(threadFileFor(root, node.id))
+            }
           } catch {
             // no transcript yet
           }

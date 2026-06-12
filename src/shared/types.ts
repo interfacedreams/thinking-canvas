@@ -28,7 +28,7 @@ export interface ForkRef {
 
 // 'research' nodes are display-only researcher transcripts spawned by a
 // research-mode turn — no composer, no forking, no session of their own.
-// 'file' nodes pin an image from the folder onto the canvas.
+// 'file' nodes pin an image or PDF from the folder onto the canvas.
 export type NodeKind = 'chat' | 'note' | 'research' | 'file'
 
 export interface PersistedNode {
@@ -42,11 +42,12 @@ export interface PersistedNode {
   // Notes: the note's markdown file — a title-named filename at the folder
   // root (e.g. "Auth ideas.md"). Owned by the main process: injected into
   // canvas.json on save from its id→file map, never set by the renderer.
-  // File nodes: the image's path relative to the folder root — set by the
+  // File nodes: the file's path relative to the folder root — set by the
   // renderer after file:attach and round-tripped through canvas.json.
   file?: string
-  // File nodes: the image bytes as a data URL. Hydrated from the file on
-  // load; never written into canvas.json.
+  // File nodes (images only): the image bytes as a data URL. Hydrated from
+  // the file on load; never written into canvas.json. PDFs render a card
+  // from their path alone, so they never carry one.
   dataUrl?: string
   // Hydrated from .canvas/threads/<nodeId>.json on load; never written
   // into canvas.json (saved separately so layout saves stay cheap).
@@ -56,9 +57,12 @@ export interface PersistedNode {
   minimized?: boolean
   sessionId?: string
   forkOf?: ForkRef
-  // Chats: image node ids whose bytes were already injected into this chat's
-  // session — later turns (and reloads) must not re-send them.
+  // Chats: file node ids (images and PDFs) whose bytes were already injected
+  // into this chat's session — later turns (and reloads) must not re-send
+  // them. The name predates PDF support; kept for canvas.json compatibility.
   injectedImages?: string[]
+  // Epoch ms of the node's last content activity — the sidebar's recency order.
+  updatedAt?: number
 }
 
 export interface PersistedEdge {
@@ -106,12 +110,18 @@ export const TITLE_MODEL: ModelId = 'claude-haiku-4-5'
 
 // --- File IPC (renderer ⇄ main) ---
 
-/** A picked image (file:choose) — previewed and measured before placement;
- *  the source path is attached (copied/referenced into the folder) on drop. */
+/** What a file node can hold — decided by extension in the main process. */
+export type FileKind = 'image' | 'pdf'
+
+/** A picked file (file:choose) — images are previewed and measured before
+ *  placement; PDFs place as a fixed card. The source path is attached
+ *  (copied/referenced into the folder) on drop. */
 export interface ChosenFile {
   sourcePath: string
   name: string
-  dataUrl: string
+  kind: FileKind
+  /** Images only — preview bytes. PDFs are never read into the renderer. */
+  dataUrl?: string
 }
 
 // --- Thread IPC (renderer ⇄ main) ---
@@ -126,13 +136,13 @@ export interface ContextNote {
   content: string
 }
 
-/** An image wired to a chat by a context edge. New images are injected into
- *  the turn's user message as image blocks (once per session); the system
- *  prompt just lists what's attached. */
-export interface ContextImage {
+/** A file (image or PDF) wired to a chat by a context edge. New files are
+ *  injected into the turn's user message as image/document blocks (once per
+ *  session); the system prompt just lists what's attached. */
+export interface ContextFile {
   id: string
   title: string
-  /** The image's path relative to the folder root. */
+  /** The file's path relative to the folder root. */
   file: string
   /** Not yet in this chat's session — this turn carries its bytes. */
   isNew?: boolean
@@ -155,8 +165,8 @@ export interface ThreadSendArgs {
   /** Notes connected to this chat by context edges, freshest content first-hand
    *  from the renderer's store. */
   contextNotes?: ContextNote[]
-  /** Images connected to this chat by context edges. */
-  contextImages?: ContextImage[]
+  /** Files (images and PDFs) connected to this chat by context edges. */
+  contextFiles?: ContextFile[]
 }
 
 /** A tool call waiting on the user's Allow/Deny (SDK canUseTool round-trip). */

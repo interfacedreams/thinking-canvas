@@ -7,9 +7,10 @@ import {
   useReactFlow,
   type NodeProps
 } from '@xyflow/react'
-import { Expand, ImageOff, Minus, Pencil, Trash2 } from 'lucide-react'
+import { Expand, FileText, ImageOff, Minus, Pencil, Trash2 } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type FileNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
+import PdfViewer from './PdfViewer'
 import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
@@ -22,8 +23,9 @@ import {
 // box drifts off the image's aspect ratio.
 const PAPER = '#FFFDF6'
 
-// All three resize controls keep the aspect ratio, so the image always
-// (nearly) fills the frame — Figma-style corner/edge scaling.
+// Images resize aspect-locked so the picture always (nearly) fills the frame —
+// Figma-style corner/edge scaling. PDFs resize freely: their pages scroll, so
+// the frame is a window, not a fit.
 const RESIZE_LIMITS = { minWidth: 240, minHeight: 120, maxHeight: MAX_NODE_H }
 
 function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.Element {
@@ -35,10 +37,12 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
   const { fitView } = useReactFlow()
 
   const titleRef = useRef<HTMLInputElement>(null)
+  const isPdf = data.kind === 'pdf'
+  const untitled = isPdf ? 'Untitled PDF' : 'Untitled image'
 
   // The title is static text (part of the header drag surface) until the user
   // enters rename mode via the pencil button or a double-click on the title.
-  // Renaming relabels the node only — the image file keeps its name.
+  // Renaming relabels the node only — the file keeps its name.
   const [editingTitle, setEditingTitle] = useState(false)
   if (data.minimized && editingTitle) setEditingTitle(false)
 
@@ -85,14 +89,14 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
       {/* the context connector: drag this circle onto a chat's circle — or
           tap it and the arrow follows the cursor until a click on a chat
-          commits (ContextConnectOverlay) — to let that chat see this image */}
+          commits (ContextConnectOverlay) — to let that chat see this file */}
       <Handle
         id={CTX_HANDLE_ID}
         type="source"
         position={Position.Bottom}
         isConnectable
         isConnectableEnd={false}
-        title="Drag — or tap, then click a chat — to attach this image as context"
+        title="Drag — or tap, then click a chat — to attach this file as context"
         onClick={(e) => {
           // keep the tap from reaching the overlay's window listener,
           // which treats any stray click as cancel
@@ -108,20 +112,20 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
           <NodeResizeControl
             position="right"
             variant={ResizeControlVariant.Line}
-            keepAspectRatio
+            keepAspectRatio={!isPdf}
             {...RESIZE_LIMITS}
             style={{ borderColor: 'transparent', borderWidth: 5 }}
           />
           <NodeResizeControl
             position="bottom"
             variant={ResizeControlVariant.Line}
-            keepAspectRatio
+            keepAspectRatio={!isPdf}
             {...RESIZE_LIMITS}
             style={{ borderColor: 'transparent', borderWidth: 5 }}
           />
           <NodeResizeControl
             position="bottom-right"
-            keepAspectRatio
+            keepAspectRatio={!isPdf}
             {...RESIZE_LIMITS}
             style={{
               background: 'transparent',
@@ -163,7 +167,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
           <input
             ref={titleRef}
             value={data.title}
-            placeholder="Untitled image"
+            placeholder={untitled}
             onChange={(e) => setTitle(id, e.target.value)}
             onBlur={() => setEditingTitle(false)}
             onKeyDown={(e) => {
@@ -182,7 +186,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
             title={data.minimized ? undefined : 'Double-click to rename'}
             className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${data.title ? '' : 'opacity-50'}`}
           >
-            {data.title || 'Untitled image'}
+            {data.title || untitled}
           </span>
         )}
         <div className="nodrag relative ml-auto flex shrink-0 items-center gap-1">
@@ -190,7 +194,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
             <button
               type="button"
               onClick={() => setEditingTitle(true)}
-              title="Rename this image"
+              title={isPdf ? 'Rename this PDF' : 'Rename this image'}
               className={CHIP_BUTTON}
             >
               <Pencil className="h-[25px] w-[25px]" />
@@ -199,7 +203,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
           <button
             type="button"
             onClick={() => requestDelete(id)}
-            title="Delete this image"
+            title={isPdf ? 'Delete this PDF' : 'Delete this image'}
             className={CHIP_BUTTON}
           >
             <Trash2 className="h-[25px] w-[25px]" />
@@ -208,9 +212,23 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
       </div>
 
       {!data.minimized && (
-        // The whole image is a drag surface — grab anywhere to move the node.
-        <div className={`${DRAG_HEADER} min-h-0 flex-1 overflow-hidden rounded-b-[13px]`}>
-          {data.dataUrl ? (
+        // Images: the whole body is a drag surface — grab anywhere to move
+        // the node. PDFs: the body is the viewer (scroll, not drag) — only
+        // the header band moves the node, like chats and notes.
+        <div
+          className={`${isPdf ? '' : DRAG_HEADER} min-h-0 flex-1 overflow-hidden rounded-b-[13px]`}
+        >
+          {isPdf && data.file ? (
+            // keyed on the path: a different file is a fresh viewer, never a reload
+            <PdfViewer key={data.file} file={data.file} focused={!!selected} />
+          ) : isPdf ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-(--np-deep)">
+              <FileText className="h-10 w-10 opacity-60" />
+              <span className="max-w-full truncate px-3 text-[15px] opacity-70">
+                PDF attaching…
+              </span>
+            </div>
+          ) : data.dataUrl ? (
             <img
               src={data.dataUrl}
               alt={data.title}
