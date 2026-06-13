@@ -1,5 +1,8 @@
 import { useRef, type Ref } from 'react'
-import { useCanvasStore, isNote } from '../store/canvas'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { History } from 'lucide-react'
+import { useCanvasStore, isNote, notePager } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
 import NoteEditor, { type NoteEditorHandle } from './NoteEditor'
@@ -28,6 +31,7 @@ export default function NoteBody({
   const setNoteContent = useCanvasStore((s) => s.setNoteContent)
   const discardNode = useCanvasStore((s) => s.discardNode)
   const respondPermission = useCanvasStore((s) => s.respondPermission)
+  const restoreVersion = useCanvasStore((s) => s.restoreVersion)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const data = node && isNote(node) ? node.data : undefined
@@ -39,11 +43,31 @@ export default function NoteBody({
   if (!data) return null
   const streaming = data.status === 'streaming'
   // A note is discardable while it has no substance yet.
-  const blank = !data.content && !data.title && !data.sessionId
+  const blank = !data.content && !data.title && !data.sessionId && data.versions.length === 0
   const palette = paletteFor(data.color)
 
+  // When the pager is parked on a past snapshot, the body turns into a read-
+  // only viewer for it (with a Restore action) instead of the live editor.
+  const { position, total, viewingOld } = notePager(data)
+  const viewed = viewingOld ? data.versions[data.viewVersion!] : undefined
+
   return (
-    <div className="nodrag mx-1 my-1 flex min-h-0 flex-1 cursor-auto flex-col overflow-hidden">
+    <div className="nodrag relative mx-1 my-1 flex min-h-0 flex-1 cursor-auto flex-col overflow-hidden">
+      {viewed && (
+        <div className="mt-1 mb-1 flex shrink-0 items-center gap-2 rounded-[10px] bg-black/5 px-3 py-1.5 text-[12px] text-neutral-600">
+          <History className="h-3.5 w-3.5 shrink-0 text-(--np-deep)" />
+          <span className="min-w-0 flex-1 truncate">
+            Version {position} of {total} · {viewed.author === 'ai' ? 'AI' : 'you'} · read-only
+          </span>
+          <button
+            type="button"
+            onClick={() => void restoreVersion(id, data.viewVersion!)}
+            className="shrink-0 cursor-pointer rounded-md bg-(--np-accent) px-2 py-0.5 font-medium text-white transition-colors hover:opacity-85"
+          >
+            Restore
+          </button>
+        </div>
+      )}
       <div
         ref={scrollRef}
         style={{
@@ -55,30 +79,50 @@ export default function NoteBody({
         }}
         className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-1 text-[15px] leading-[26px] text-neutral-900"
       >
-        {/* While the AI is writing into an as-yet-empty note, stand in a clear
-            generating line for the empty "Write a note…" placeholder — the note
-            is busy, not idle. Once content starts landing, the editor takes
-            over and a trailing pulse marks the still-streaming tail. */}
-        {streaming && !data.content ? (
-          <div className="flex items-center gap-2 px-3 py-2 text-neutral-400">
-            <span className="animate-pulse text-[18px] leading-none tracking-widest">●●●</span>
-            <span className="text-[13px]">Writing the note…</span>
+        {viewed ? (
+          <div className="note-prose px-3 py-2 break-words opacity-80">
+            {viewed.content ? (
+              <Markdown remarkPlugins={[remarkGfm]}>{viewed.content}</Markdown>
+            ) : (
+              <span className="text-neutral-400 italic">Empty version</span>
+            )}
           </div>
         ) : (
-          <NoteEditor
-            ref={editorRef}
-            content={data.content}
-            readOnly={streaming}
-            onChange={(md) => setNoteContent(id, md)}
-            onEscape={() => {
-              if (blank) discardNode(id)
-            }}
-          />
-        )}
-        {streaming && data.content && (
-          <div className="animate-pulse px-3 py-1 tracking-widest text-neutral-400">●●●</div>
+          <>
+            {/* While the AI is writing into an as-yet-empty note, stand in a pulse
+                for the empty "Write a note…" placeholder — the note is busy, not
+                idle. Once content starts landing, the editor takes over and a
+                trailing pulse marks the still-streaming tail. */}
+            {streaming && !data.content ? (
+              <div className="animate-pulse px-3 py-2 text-[18px] leading-none tracking-widest text-neutral-400">
+                ●●●
+              </div>
+            ) : (
+              <NoteEditor
+                ref={editorRef}
+                content={data.content}
+                readOnly={streaming}
+                onChange={(md) => setNoteContent(id, md)}
+                onEscape={() => {
+                  if (blank) discardNode(id)
+                }}
+              />
+            )}
+          </>
         )}
       </div>
+
+      {/* Transform/edit of an existing note: the body keeps showing the prior
+          text (dimmed by the editor's read-only style) while the AI reworks it.
+          Float the same triple-dots loader in the dead center as a "working"
+          marker, rather than trailing it off the end of the content. */}
+      {!viewed && streaming && data.content && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span className="animate-pulse text-[18px] leading-none tracking-widest text-neutral-400">
+            ●●●
+          </span>
+        </div>
+      )}
 
       {/* A tool the editing turn fired needs the user's OK — without this the
           turn would stall invisibly (the note just never fills in). */}
@@ -87,15 +131,6 @@ export default function NoteBody({
           request={data.pendingPermission}
           onRespond={(allow) => respondPermission(id, data.pendingPermission!.requestId, allow)}
         />
-      )}
-
-      {/* The AI's brief commentary from its last turn — and, when a turn fails,
-          the ⚠️ reason — so a failed transform says so instead of leaving an
-          empty note behind. */}
-      {!streaming && data.lastReply && (
-        <div className="nodrag mt-1 shrink-0 rounded-[10px] bg-white/70 px-3 py-2 text-[13px] leading-snug whitespace-pre-wrap text-neutral-600">
-          {data.lastReply}
-        </div>
       )}
     </div>
   )

@@ -6,7 +6,7 @@ import {
   ResizeControlVariant,
   type NodeProps
 } from '@xyflow/react'
-import { Minus, Pencil, Trash2 } from 'lucide-react'
+import { Minus, Trash2 } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type LinkNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -22,6 +22,8 @@ import {
   DRAG_HEADER,
   HIDDEN_HANDLE
 } from '../lib/nodeChrome'
+import { useTitleGuard } from '../lib/titleGuard'
+import TitleEditSlot from './TitleEditSlot'
 
 // Same paper fill as notes and file nodes.
 const PAPER = '#FFFDF6'
@@ -41,6 +43,9 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
 
   const [editingTitle, setEditingTitle] = useState(false)
   if (data.minimized && editingTitle) setEditingTitle(false)
+  // Renaming to a title another node already wears is refused: warn, block the
+  // save, and snap back to the original name if the user leaves it colliding.
+  const { duplicate, revert } = useTitleGuard(id, editingTitle, data.title)
 
   useEffect(() => {
     if (!editingTitle) return
@@ -59,7 +64,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
     <div
       style={
         {
-          backgroundColor: `${PAPER}D9`,
+          backgroundColor: PAPER,
           '--np-bg': palette.bg,
           '--np-edge': palette.edge,
           '--np-chip': `${palette.edge}99`,
@@ -68,7 +73,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           '--np-ring': `${palette.accent}B3`
         } as React.CSSProperties
       }
-      className={`relative flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
+      className={`relative isolate flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
         selected ? 'ring-2 ring-(--np-ring)' : ''
       }`}
     >
@@ -76,11 +81,12 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
       {/* hidden layout anchors (left/right) for any future edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the context connector: drag this circle onto a chat's circle — or
+      {/* the context connector: drag this square onto a chat's circle — or
           tap it and the arrow follows the cursor until a click on a chat
           commits (ContextConnectOverlay) — to let that chat read this page
           (each send extracts the rendered page from this tab's guest;
-          WebFetch is the fallback when the guest isn't mounted) */}
+          WebFetch is the fallback when the guest isn't mounted). A square
+          because, like a note, a tab is a resource. */}
       <Handle
         id={CTX_HANDLE_ID}
         type="source"
@@ -95,7 +101,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           setCtxConnectSource(armed ? null : id)
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
-        style={ctxHandleStyle(palette.accent, 'bottom')}
+        style={ctxHandleStyle(palette.accent, 'bottom', 'square')}
       />
 
       {!data.minimized && data.url && (
@@ -130,7 +136,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           live tab it carries only the chip buttons: the browser toolbar below
           already shows the address, so title and URL text would be noise */}
       <div
-        style={{ backgroundColor: `${palette.bg}D9` }}
+        style={{ backgroundColor: palette.bg }}
         className={`${DRAG_HEADER} flex shrink-0 items-center gap-2 px-3 py-1.5 ${
           data.minimized ? 'rounded-[13px]' : 'rounded-t-[13px] border-b border-(--np-edge)'
         }`}
@@ -154,10 +160,18 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
             value={data.title}
             placeholder="Untitled tab"
             onChange={(e) => setTitle(id, e.target.value)}
-            onBlur={() => setEditingTitle(false)}
+            onBlur={() => {
+              if (duplicate) revert()
+              setEditingTitle(false)
+            }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === 'Escape') {
+              if (e.key === 'Enter') {
                 e.preventDefault()
+                if (duplicate) return // a colliding title can't be committed
+                setEditingTitle(false)
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                if (duplicate) revert()
                 setEditingTitle(false)
               }
             }}
@@ -187,14 +201,12 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
         )}
         <div className="nodrag relative ml-auto flex shrink-0 items-center gap-1">
           {!data.minimized && !bare && (
-            <button
-              type="button"
-              onClick={() => setEditingTitle(true)}
-              title="Rename this tab"
-              className={CHIP_BUTTON}
-            >
-              <Pencil className="h-[25px] w-[25px]" />
-            </button>
+            <TitleEditSlot
+              editing={editingTitle}
+              duplicate={duplicate}
+              onEdit={() => setEditingTitle(true)}
+              renameHint="Rename this tab"
+            />
           )}
           {!data.minimized && <TransformButton id={id} />}
           <button

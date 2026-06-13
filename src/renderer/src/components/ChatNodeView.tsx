@@ -8,7 +8,7 @@ import {
   useStoreApi,
   type NodeProps
 } from '@xyflow/react'
-import { GitFork, Minus, Pencil, Trash2, TriangleAlert } from 'lucide-react'
+import { GitFork, Minus, Trash2, TriangleAlert } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type ChatNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -22,14 +22,19 @@ import {
   CTX_HANDLE_ID,
   ctxHandleStyle,
   DRAG_HEADER,
-  HIDDEN_HANDLE
+  HIDDEN_HANDLE,
+  OUTPUT_HANDLE_ID
 } from '../lib/nodeChrome'
+import { useTitleGuard } from '../lib/titleGuard'
+import TitleEditSlot from './TitleEditSlot'
 
 function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.Element {
   const setTitle = useCanvasStore((s) => s.setTitle)
   const forkChat = useCanvasStore((s) => s.forkChat)
   const requestDelete = useCanvasStore((s) => s.requestDelete)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
+  const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   // Explicit height only (user resize / restored from disk) — React Flow's own
   // `height` prop reports the *measured* height, which would pin the node at
   // whatever size it currently is and stop it from growing with new content.
@@ -46,6 +51,9 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
   // Minimizing exits rename during render because the input unmounts blur-less.
   const [editingTitle, setEditingTitle] = useState(false)
   if (data.minimized && editingTitle) setEditingTitle(false)
+  // Renaming to a title another node already wears is refused: warn, block the
+  // save, and snap back to the original name if the user leaves it colliding.
+  const { duplicate, revert } = useTitleGuard(id, editingTitle, data.title)
 
   useEffect(() => {
     if (!editingTitle) return
@@ -54,6 +62,9 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
   }, [editingTitle])
 
   const streaming = data.status === 'streaming'
+  // Unnamed once the chat is underway: show a pulsing "…" until the background
+  // title turn lands (see the thread-event handler) instead of the raw prompt.
+  const awaitingTitle = !data.title && data.messages.length > 0
   // Researcher transcripts spawned by a research turn — display-only: they ran
   // inside the lead's session, so there's nothing to reply to (and no composer).
   const isResearch = data.kind === 'research'
@@ -114,7 +125,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
         {
           // the growth cap only limits auto-sizing; an explicit (user-resized) height wins
           maxHeight: explicitHeight ?? data.growthCap ?? MAX_NODE_H,
-          backgroundColor: `${palette.bg}D9`, // body fill at 85%
+          backgroundColor: palette.bg, // body fill, fully opaque
           '--np-bg': palette.bg,
           '--np-edge': palette.edge,
           '--np-chip': `${palette.edge}99`, // chip buttons at 60%
@@ -123,7 +134,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
           '--np-ring': `${palette.accent}B3` // selection ring at 70%
         } as React.CSSProperties
       }
-      className={`relative flex h-full w-full flex-col rounded-[14px] border border-black/5 shadow-md ${
+      className={`relative isolate flex h-full w-full flex-col rounded-[14px] border border-black/5 shadow-md ${
         selected ? 'ring-2 ring-(--np-ring)' : ''
       }`}
     >
@@ -145,6 +156,25 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
           title="Drop a note's or image's circle here to attach it as context"
           className="ctx-handle"
           style={ctxHandleStyle(palette.accent)}
+        />
+      )}
+      {/* the output connector: drag this circle onto a note's top square — or
+          tap it, then click a note — to let this chat read AND write that note.
+          Research chats can't edit, so they get no output port. */}
+      {!isResearch && (
+        <Handle
+          id={OUTPUT_HANDLE_ID}
+          type="source"
+          position={Position.Bottom}
+          isConnectable
+          isConnectableEnd={false}
+          title="Drag — or tap, then click a note — to let this chat write that note"
+          onClick={(e) => {
+            e.stopPropagation()
+            setCtxConnectSource(armed ? null : id)
+          }}
+          className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
+          style={ctxHandleStyle(palette.accent, 'bottom', 'circle')}
         />
       )}
 
@@ -204,17 +234,22 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
             value={data.title}
             placeholder="New chat"
             onChange={(e) => setTitle(id, e.target.value)}
-            onBlur={() => setEditingTitle(false)}
+            onBlur={() => {
+              if (duplicate) revert()
+              setEditingTitle(false)
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
+                if (duplicate) return // a colliding title can't be committed
                 setEditingTitle(false)
                 bodyRef.current?.focusComposer()
               } else if (e.key === 'Escape') {
+                if (duplicate) revert()
                 setEditingTitle(false)
               }
             }}
-            className="nodrag min-w-0 flex-1 cursor-text truncate bg-transparent text-[26px] font-medium text-(--np-deep) outline-none placeholder:text-(--np-deep) placeholder:opacity-50"
+            className="nodrag min-w-0 flex-1 cursor-text truncate bg-transparent text-[23px] font-medium text-(--np-deep) outline-none placeholder:text-(--np-deep) placeholder:opacity-50"
           />
         ) : (
           <span
@@ -222,9 +257,9 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
               if (!data.minimized) setEditingTitle(true)
             }}
             title={data.minimized ? undefined : 'Double-click to rename'}
-            className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${data.title ? '' : 'opacity-50'}`}
+            className={`min-w-0 flex-1 truncate text-[23px] font-medium text-(--np-deep) ${data.title ? '' : 'opacity-50'} ${awaitingTitle ? 'animate-pulse tracking-widest' : ''}`}
           >
-            {data.title || 'New chat'}
+            {awaitingTitle ? '●●●' : data.title || 'New chat'}
           </span>
         )}
         {data.minimized && streaming && (
@@ -238,14 +273,12 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
         )}
         <div className="nodrag relative ml-auto flex shrink-0 items-center gap-1">
           {!data.minimized && (
-            <button
-              type="button"
-              onClick={() => setEditingTitle(true)}
-              title="Rename this chat"
-              className={CHIP_BUTTON}
-            >
-              <Pencil className="h-[25px] w-[25px]" />
-            </button>
+            <TitleEditSlot
+              editing={editingTitle}
+              duplicate={duplicate}
+              onEdit={() => setEditingTitle(true)}
+              renameHint="Rename this chat"
+            />
           )}
           {canFork && (
             <button

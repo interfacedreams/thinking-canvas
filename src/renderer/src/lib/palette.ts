@@ -60,3 +60,11 @@ export function nextColorId(prevId?: string): string {
   const i = PALETTE.findIndex((p) => p.id === prevId)
   return PALETTE[(i + 1) % PALETTE.length].id
 }
+
+/** A palette color guaranteed different from `sourceId`, picked across the ring
+ *  for visible contrast. Used for the transform wrapper and the note it spawns,
+ *  so the new note reads as related to — but distinct from — its source. */
+export function contrastColorId(sourceId?: string): string {
+  const i = PALETTE.findIndex((p) => p.id === (sourceId ?? PALETTE[0].id))
+  return PALETTE[((i < 0 ? 0 : i) + 4) % PALETTE.length].id
+}

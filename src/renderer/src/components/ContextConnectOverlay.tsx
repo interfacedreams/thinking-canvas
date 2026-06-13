@@ -11,14 +11,22 @@ import {
 } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 
-// Click-to-connect: once a note's, file's, or link's circle is tapped (ctxConnectSource
-// in the store), this overlay draws a faded context arrow from that circle to
-// the cursor. Landing on a chat snaps the arrow onto its circle — where it
-// stays, pulsing, until the cursor strays — and a click commits the connection.
-// Any other click, or Escape, cancels.
+// Click-to-connect: once a source's bottom circle is tapped (ctxConnectSource
+// in the store), this overlay draws a faded arrow from that circle to the
+// cursor. Landing on a valid target snaps the arrow onto its top port — where
+// it stays, pulsing, until the cursor strays — and a click commits. Any other
+// click, or Escape, cancels. Two flavours share this geometry (source bottom →
+// target top): a resource (note/file/link) → chat context edge, and a chat →
+// note output edge. The source's kind picks which targets are valid.
 
-// Context sources: anything with a bottom circle that can feed a chat.
-const isCtxSource = (n: CanvasNode): boolean => isNote(n) || isFile(n) || isLink(n)
+// Sources: a resource feeds a chat; a chat feeds a note.
+const isCtxSource = (n: CanvasNode): boolean =>
+  isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research')
+
+// Given the armed source, is `n` a valid drop target? A chat source feeds
+// notes; any other source feeds chats.
+const isCtxTarget = (source: CanvasNode, n: CanvasNode): boolean =>
+  isChat(source) ? isNote(n) : isChat(n) && n.data.kind !== 'research'
 
 // Circle geometry mirrors ctxHandleStyle: center 15px outside the node edge
 // (above for chats, below for notes), radius 12 — the pending arrow runs from
@@ -60,6 +68,7 @@ function hits(n: CanvasNode, p: { x: number; y: number }, radius: number): boole
 function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | null {
   const { screenToFlowPosition, getZoom } = useReactFlow()
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
+  const addOutputEdge = useCanvasStore((s) => s.addOutputEdge)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === sourceId))
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
@@ -82,12 +91,15 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       setCursor(p)
       const radius = SNAP_RADIUS / getZoom()
       const nodes = useCanvasStore.getState().nodes
+      const source = nodes.find((n) => n.id === sourceId)
       let next: string | null = null
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const n = nodes[i]
-        if (isChat(n) && n.data.kind !== 'research' && hits(n, p, radius)) {
-          next = n.id
-          break
+      if (source) {
+        for (let i = nodes.length - 1; i >= 0; i--) {
+          const n = nodes[i]
+          if (isCtxTarget(source, n) && hits(n, p, radius)) {
+            next = n.id
+            break
+          }
         }
       }
       if (next !== snapRef.current) {
@@ -97,14 +109,20 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
     }
     window.addEventListener('pointermove', onMove)
     return () => window.removeEventListener('pointermove', onMove)
-  }, [screenToFlowPosition, getZoom])
+  }, [screenToFlowPosition, getZoom, sourceId])
 
   // Snapped click commits; any other click cancels. The arming tap never
   // lands here: these listeners attach a tick after it finished propagating
   // (and the circles stopPropagation besides).
   useEffect(() => {
     const onClick = (): void => {
-      if (snapRef.current) addContextEdge(sourceId, snapRef.current)
+      if (snapRef.current) {
+        // Read the source fresh so a chat source commits an output edge and a
+        // resource source commits a context edge.
+        const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
+        if (src && isChat(src)) addOutputEdge(sourceId, snapRef.current)
+        else addContextEdge(sourceId, snapRef.current)
+      }
       setCtxConnectSource(null)
     }
     const onKey = (e: KeyboardEvent): void => {
@@ -116,7 +134,7 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       window.removeEventListener('click', onClick)
       window.removeEventListener('keydown', onKey)
     }
-  }, [addContextEdge, setCtxConnectSource, sourceId])
+  }, [addContextEdge, addOutputEdge, setCtxConnectSource, sourceId])
 
   if (!sourceNode || !isCtxSource(sourceNode)) return null
   const snapped = snapId && targetNode ? targetNode : null

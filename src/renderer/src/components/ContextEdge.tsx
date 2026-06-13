@@ -39,7 +39,7 @@ export default function ContextEdge({
         <button
           type="button"
           onClick={() => removeContextEdge(id)}
-          title="Disconnect this context from the chat"
+          title="Disconnect"
           style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           className="nodrag nopan pointer-events-auto absolute flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-black/10 bg-white text-neutral-400 shadow-sm transition-colors hover:bg-red-50 hover:text-red-600"
         >

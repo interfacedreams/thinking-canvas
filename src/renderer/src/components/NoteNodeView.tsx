@@ -6,8 +6,8 @@ import {
   ResizeControlVariant,
   type NodeProps
 } from '@xyflow/react'
-import { Minus, Pencil, Trash2 } from 'lucide-react'
-import { useCanvasStore, MAX_NODE_H, type NoteNode } from '../store/canvas'
+import { ChevronLeft, ChevronRight, Minus, Trash2 } from 'lucide-react'
+import { useCanvasStore, MAX_NODE_H, notePager, type NoteNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
 import NoteBody from './NoteBody'
@@ -20,8 +20,11 @@ import {
   CTX_HANDLE_ID,
   ctxHandleStyle,
   DRAG_HEADER,
-  HIDDEN_HANDLE
+  HIDDEN_HANDLE,
+  INPUT_HANDLE_ID
 } from '../lib/nodeChrome'
+import { useTitleGuard } from '../lib/titleGuard'
+import TitleEditSlot from './TitleEditSlot'
 import { type NoteEditorHandle } from './NoteEditor'
 
 // Notes read as paper, not post-it: a warm-white ruled body under a colored
@@ -36,14 +39,27 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const clearFocusDraft = useCanvasStore((s) => s.clearFocusDraft)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const setViewVersion = useCanvasStore((s) => s.setViewVersion)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   const explicitHeight = useCanvasStore((s) => s.nodes.find((n) => n.id === id)?.height)
   const { docked, mode, open, collapse } = usePanel(id)
+
+  // Version pager: a floating ‹ n/total › control below the note. Positions
+  // run 1..total with the last always the live, editable content; stepping
+  // back parks the body on a read-only snapshot (NoteBody renders it).
+  const { position, total } = notePager(data)
+  const goTo = (p: number): void => {
+    const clamped = Math.min(Math.max(p, 1), total)
+    setViewVersion(id, clamped >= total ? undefined : clamped - 1)
+  }
 
   const titleRef = useRef<HTMLInputElement>(null)
   const editorRef = useRef<NoteEditorHandle>(null)
 
   const streaming = data.status === 'streaming'
+  // Unnamed but already streaming or filled in: show a pulsing "…" until the
+  // background title turn lands (see the thread-event handler).
+  const awaitingTitle = !data.title && (streaming || !!data.content)
   const palette = paletteFor(data.color)
 
   // A note is discardable while it has no substance yet.
@@ -57,6 +73,9 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
   const [editingTitle, setEditingTitle] = useState(false)
   if (data.minimized && editingTitle) setEditingTitle(false)
   else if (data.focusDraft && !editingTitle) setEditingTitle(true)
+  // Renaming to a title another node already wears is refused: warn, block the
+  // save, and snap back to the original name if the user leaves it colliding.
+  const { duplicate, revert } = useTitleGuard(id, editingTitle, data.title)
 
   // Focus the title input when rename mode opens. A fresh node mounts
   // `visibility: hidden` until React Flow measures it, and focus() on a hidden
@@ -87,7 +106,7 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
       style={
         {
           maxHeight: explicitHeight ?? data.growthCap ?? MAX_NODE_H,
-          backgroundColor: `${PAPER}D9`, // paper fill at 85%, matching chat nodes
+          backgroundColor: PAPER, // paper fill, fully opaque
           '--np-bg': palette.bg,
           '--np-edge': palette.edge,
           '--np-chip': `${palette.edge}99`,
@@ -96,7 +115,7 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
           '--np-ring': `${palette.accent}B3`
         } as React.CSSProperties
       }
-      className={`relative flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
+      className={`relative isolate flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
         selected ? 'ring-2 ring-(--np-ring)' : ''
       }`}
     >
@@ -104,7 +123,20 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
       {/* hidden layout anchors (left/right) kept for any id-less edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the context connector: drag this circle onto a chat's circle — or
+      {/* the input connector: a chat's bottom circle drops here to gain
+          read+write access to this note. Receive-only — the arrow always
+          starts at the chat. */}
+      <Handle
+        id={INPUT_HANDLE_ID}
+        type="target"
+        position={Position.Top}
+        isConnectable
+        isConnectableStart={false}
+        title="Drop a chat's circle here to let it write this note"
+        className="ctx-handle"
+        style={ctxHandleStyle(palette.accent, 'top', 'square')}
+      />
+      {/* the context connector: drag this square onto a chat's circle — or
           tap it and the arrow follows the cursor until a click on a chat
           commits (ContextConnectOverlay) — to feed the note into that chat's
           system prompt */}
@@ -161,7 +193,7 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
 
       {/* colored header band — the note's "tab of sticky tape" */}
       <div
-        style={{ backgroundColor: `${palette.bg}D9` }}
+        style={{ backgroundColor: palette.bg }}
         className={`${DRAG_HEADER} flex shrink-0 items-center gap-2 px-3 py-1.5 ${
           data.minimized ? 'rounded-[13px]' : 'rounded-t-[13px] border-b border-(--np-edge)'
         }`}
@@ -185,17 +217,22 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
             onChange={(e) => setTitle(id, e.target.value)}
             onBlur={() => {
               setEditingTitle(false)
-              void commitNoteTitle(id) // the file is renamed to match the title
+              if (duplicate) revert()
+              else void commitNoteTitle(id) // the file is renamed to match the title
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
+                if (duplicate) return // a colliding title can't be committed
                 setEditingTitle(false)
                 void commitNoteTitle(id)
                 editorRef.current?.focus()
               } else if (e.key === 'Escape') {
                 if (blank) discardNode(id)
-                else {
+                else if (duplicate) {
+                  revert()
+                  setEditingTitle(false)
+                } else {
                   setEditingTitle(false)
                   void commitNoteTitle(id)
                 }
@@ -209,9 +246,9 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
               if (!data.minimized) setEditingTitle(true)
             }}
             title={data.minimized ? undefined : 'Double-click to rename'}
-            className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${data.title ? '' : 'opacity-50'}`}
+            className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${data.title ? '' : 'opacity-50'} ${awaitingTitle ? 'animate-pulse tracking-widest' : ''}`}
           >
-            {data.title || 'Untitled note'}
+            {awaitingTitle ? '●●●' : data.title || 'Untitled note'}
           </span>
         )}
         {data.minimized && streaming && (
@@ -219,14 +256,12 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
         )}
         <div className="nodrag relative ml-auto flex shrink-0 items-center gap-1">
           {!data.minimized && (
-            <button
-              type="button"
-              onClick={() => setEditingTitle(true)}
-              title="Rename this note"
-              className={CHIP_BUTTON}
-            >
-              <Pencil className="h-[25px] w-[25px]" />
-            </button>
+            <TitleEditSlot
+              editing={editingTitle}
+              duplicate={duplicate}
+              onEdit={() => setEditingTitle(true)}
+              renameHint="Rename this note"
+            />
           )}
           {!data.minimized && <TransformButton id={id} />}
           <button
@@ -246,6 +281,36 @@ function NoteNodeView({ id, data, selected }: NodeProps<NoteNode>): React.JSX.El
         ) : (
           <NoteBody id={id} focused={!!selected} editorRef={editorRef} />
         ))}
+
+      {/* Version pager — floats just below the card's bottom-right, clear of
+          the centered context connector. Only appears once a note has history
+          (an AI turn has touched it), and never while it's collapsed/docked. */}
+      {!data.minimized && !docked && total > 1 && (
+        <div className="nodrag absolute top-full right-2 mt-1.5 flex items-center gap-0.5">
+
+          <button
+            type="button"
+            onClick={() => goTo(position - 1)}
+            disabled={streaming || position <= 1}
+            title="Older version"
+            className={`${CHIP_BUTTON} disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent`}
+          >
+            <ChevronLeft className="h-[22px] w-[22px]" />
+          </button>
+          <span className="px-1 text-[18px] font-medium whitespace-nowrap text-(--np-deep) tabular-nums">
+            {position}/{total}
+          </span>
+          <button
+            type="button"
+            onClick={() => goTo(position + 1)}
+            disabled={streaming || position >= total}
+            title="Newer version"
+            className={`${CHIP_BUTTON} disabled:cursor-default disabled:opacity-30 disabled:hover:bg-transparent`}
+          >
+            <ChevronRight className="h-[22px] w-[22px]" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

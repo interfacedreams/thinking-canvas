@@ -18,8 +18,10 @@ import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
 import {
   BROWSE_PARTITION,
+  DEFAULT_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_PERMISSION_SETTINGS,
+  EFFORT_OPTIONS,
   MODEL_OPTIONS,
   TITLE_MODEL
 } from '../shared/types'
@@ -27,8 +29,11 @@ import type {
   AuthStatus,
   CanvasDoc,
   ChosenFile,
+  EffortId,
   FolderState,
   ModelId,
+  NoteDoc,
+  NoteVersion,
   PermissionReply,
   PermissionSettings,
   PersistedMessage,
@@ -66,12 +71,13 @@ const canvasFileFor = (root: string): string => join(root, '.canvas', 'canvas.js
 const threadsDirFor = (root: string): string => join(root, '.canvas', 'threads')
 const threadFileFor = (root: string, nodeId: string): string =>
   join(threadsDirFor(root), `${nodeId}.json`)
-// Pre-migration note bodies (and now-retired version sidecars) live here,
-// keyed by node id.
+// Pre-migration note bodies live here, keyed by node id. Version sidecars
+// still live here too (the live body moved to a title-named root file, but its
+// history stays keyed by the stable node id, out of the user's file view).
 const noteMetaDirFor = (root: string): string => join(root, '.canvas', 'notes')
 const legacyNoteFileFor = (root: string, nodeId: string): string =>
   join(noteMetaDirFor(root), `${nodeId}.md`)
-const legacyNoteVersionsFileFor = (root: string, nodeId: string): string =>
+const noteVersionsFileFor = (root: string, nodeId: string): string =>
   join(noteMetaDirFor(root), `${nodeId}.versions.json`)
 
 // Node ids come from the renderer over IPC — keep them path-segment safe.
@@ -174,6 +180,54 @@ async function readTextIfExists(path: string): Promise<string> {
   } catch {
     return ''
   }
+}
+
+// --- Note versions ------------------------------------------------------
+// A note's history lives beside it as a JSON sidecar keyed by node id. The
+// live content is always the .md file; each entry here is a prior state kept
+// when a version boundary was crossed.
+
+async function readNoteVersions(root: string, nodeId: string): Promise<NoteVersion[]> {
+  try {
+    const doc: NoteDoc = JSON.parse(await fs.readFile(noteVersionsFileFor(root, nodeId), 'utf8'))
+    return Array.isArray(doc.versions) ? doc.versions : []
+  } catch {
+    return []
+  }
+}
+
+async function writeNoteVersions(
+  root: string,
+  nodeId: string,
+  versions: NoteVersion[]
+): Promise<void> {
+  await fs.mkdir(noteMetaDirFor(root), { recursive: true })
+  const doc: NoteDoc = { version: 1, versions }
+  await fs.writeFile(noteVersionsFileFor(root, nodeId), JSON.stringify(doc, null, 2))
+}
+
+/**
+ * Version boundary: snapshot the note's live content if it has drifted from
+ * the latest stored version. Called with 'user' before an AI turn (so a note's
+ * current human-authored content becomes its own version, never lost) and
+ * 'ai' after one (so the agent's result is preserved too). A first AI write of
+ * an empty note creates no 'user' version — there was nothing to keep.
+ */
+async function snapshotNote(
+  root: string,
+  nodeId: string,
+  author: NoteVersion['author']
+): Promise<NoteVersion[]> {
+  const path = notePathFor(root, nodeId)
+  const content = path ? await readTextIfExists(path) : ''
+  const versions = await readNoteVersions(root, nodeId)
+  const last = versions[versions.length - 1]
+  const drifted = last ? last.content !== content : content !== ''
+  if (drifted) {
+    versions.push({ content, author, at: new Date().toISOString() })
+    await writeNoteVersions(root, nodeId, versions)
+  }
+  return versions
 }
 
 // --- File nodes -----------------------------------------------------------
@@ -657,7 +711,7 @@ function registerThreadIpc(): void {
     try {
       const turn = query({
         prompt:
-          'Write a title for the conversation below: 3-6 words, plain text, no quotes, ' +
+          'Write a title for the conversation below: usually 2-4 words, plain text, no quotes, ' +
           'no trailing punctuation. Reply with the title only.\n\n' +
           conversation,
         options: {
@@ -706,15 +760,21 @@ function registerThreadIpc(): void {
         noteTitle,
         research,
         model,
+        effort,
         contextNotes,
         contextFiles,
-        contextLinks
+        contextLinks,
+        outputNotes
       }: ThreadSendArgs
     ) => {
       // The renderer sends an id from MODEL_OPTIONS; anything else falls back.
       const turnModel = MODEL_OPTIONS.some((m) => m.id === model)
         ? (model as ModelId)
         : DEFAULT_MODEL
+      // Likewise the effort id is validated against EFFORT_OPTIONS.
+      const turnEffort = EFFORT_OPTIONS.some((e) => e.id === effort)
+        ? (effort as EffortId)
+        : DEFAULT_EFFORT
       const wc = event.sender
       const emit = (payload: ThreadEvent): void => {
         if (!wc.isDestroyed()) wc.send('thread:event', payload)
@@ -737,6 +797,32 @@ function registerThreadIpc(): void {
         return
       }
 
+      // Notes this chat may write (output edges) — declared outside the try so
+      // the catch's settle pass can see them. Each rides the system prompt for
+      // reading and is editable on disk; `before` is the pre-turn content (kept
+      // as a 'user' version), `mirrored` tracks the last content streamed back.
+      const outputTargets: {
+        id: string
+        title: string
+        path: string
+        before: string
+        mirrored: string
+      }[] = []
+      // The turn is the version boundary for output notes too: any whose file
+      // the agent changed becomes one 'ai' version, with its settled content
+      // and fresh history mirrored to the note node. Idempotent — an unchanged
+      // note is skipped. Run on both success and failure (a turn can die
+      // mid-edit). Safe to call twice: the second pass finds nothing drifted.
+      const settleOutputNotes = async (): Promise<void> => {
+        for (const t of outputTargets) {
+          const content = await readTextIfExists(t.path)
+          if (content !== t.before) {
+            const versions = await snapshotNote(root, t.id, 'ai')
+            emit({ nodeId: t.id, type: 'note-content', content, versions })
+          }
+        }
+      }
+
       try {
         if (notePath) {
           // The Edit tool needs a file to edit — make sure it exists.
@@ -745,6 +831,26 @@ function registerThreadIpc(): void {
           } catch {
             await fs.writeFile(notePath, '')
           }
+          // The note's current (human-authored) content becomes its own
+          // version before the AI touches it, so an edit never loses it.
+          await snapshotNote(root, nodeId, 'user')
+        }
+
+        // Populate the output targets: ensure each note's file exists and
+        // snapshot its pre-turn content as a 'user' version (a human edit is
+        // never lost), then track it for live mirroring.
+        for (const n of outputNotes ?? []) {
+          if (!isSafeNodeId(n.id)) continue
+          const path = notePathFor(root, n.id)
+          if (!path) continue
+          try {
+            await fs.access(path)
+          } catch {
+            await fs.writeFile(path, n.content ?? '')
+          }
+          await snapshotNote(root, n.id, 'user')
+          const before = await readTextIfExists(path)
+          outputTargets.push({ id: n.id, title: n.title, path, before, mirrored: before })
         }
 
         // Connected notes ride the system prompt, re-read from the canvas on
@@ -840,8 +946,30 @@ function registerThreadIpc(): void {
         ]
           .filter(Boolean)
           .join('\n\n')
+        // Output notes the chat may write — distinct framing from contextNotes:
+        // these CAN be edited (by editing their file), the rest must not be.
+        const writableAppend =
+          outputTargets.length > 0
+            ? 'You can edit the following note files to update them — the user wired this ' +
+              'chat to write them. Their full, current contents are below, refreshed on every ' +
+              'message. To change a note, edit its file with the Edit tool (or Write if it is ' +
+              'empty); write each paragraph as one long line — never hard-wrap prose at a ' +
+              'column width or end lines with trailing spaces; the note editor wraps to fit. ' +
+              'You may also simply read them. Do not create or edit any other file unless the ' +
+              'user explicitly asks.\n\n' +
+              outputTargets
+                .map((t) => {
+                  const file = noteFiles.get(t.id)
+                  const attrs =
+                    `title=${JSON.stringify(t.title)}` +
+                    (file ? ` file=${JSON.stringify(file)}` : '')
+                  return `<note ${attrs}>\n${t.before}\n</note>`
+                })
+                .join('\n')
+            : ''
         const systemAppend = [
           contextAppend,
+          writableAppend,
           filesAppend,
           linksAppend,
           research ? RESEARCH_APPEND : ''
@@ -908,6 +1036,7 @@ function registerThreadIpc(): void {
           options: {
             cwd: root,
             model: turnModel,
+            effort: turnEffort,
             resume: forkFrom?.sessionId ?? sessionId,
             // Forking resumes the parent transcript truncated at the anchor message
             // under a NEW session id. The prefix is byte-identical, so the first
@@ -1012,12 +1141,23 @@ function registerThreadIpc(): void {
           }
           if (msg.type === 'system' && msg.subtype === 'init') {
             emit({ nodeId, type: 'session', sessionId: msg.session_id })
-          } else if (msg.type === 'user' && notePath) {
-            // A tool just returned — if it changed the note, stream the fresh content.
-            const content = await readTextIfExists(notePath)
-            if (content !== mirroredNote) {
-              mirroredNote = content
-              emit({ nodeId, type: 'note-content', content })
+          } else if (msg.type === 'user' && (notePath || outputTargets.length > 0)) {
+            // A tool just returned — if it changed the note (this session's own
+            // note, or any output note the chat may write), stream the fresh
+            // content to that note's node.
+            if (notePath) {
+              const content = await readTextIfExists(notePath)
+              if (content !== mirroredNote) {
+                mirroredNote = content
+                emit({ nodeId, type: 'note-content', content })
+              }
+            }
+            for (const t of outputTargets) {
+              const content = await readTextIfExists(t.path)
+              if (content !== t.mirrored) {
+                t.mirrored = content
+                emit({ nodeId: t.id, type: 'note-content', content })
+              }
             }
           } else if (msg.type === 'user' && research && msg.parent_tool_use_id === null) {
             // A researcher's report came back as the Agent tool's result.
@@ -1082,10 +1222,14 @@ function registerThreadIpc(): void {
                 ` cache_create=${u.cache_creation_input_tokens} out=${u.output_tokens}` +
                 ` cost=$${msg.total_cost_usd.toFixed(4)}`
             )
-            let note: { content: string } | undefined
+            let note: { content: string; versions: NoteVersion[] } | undefined
             if (notePath) {
-              note = { content: await readTextIfExists(notePath) }
+              // The turn is the version boundary: whatever edits it made, the
+              // settled file becomes one 'ai' version.
+              const versions = await snapshotNote(root, nodeId, 'ai')
+              note = { content: await readTextIfExists(notePath), versions }
             }
+            await settleOutputNotes()
             emit({
               nodeId,
               type: 'done',
@@ -1104,12 +1248,14 @@ function registerThreadIpc(): void {
           }
         }
       } catch (err) {
-        // A turn that died mid-edit may have changed the note — mirror whatever
-        // landed so the renderer isn't left stale.
-        let note: { content: string } | undefined
+        // A turn that died mid-edit may have changed the note — version and
+        // mirror whatever landed so the renderer isn't left stale.
+        let note: { content: string; versions: NoteVersion[] } | undefined
         if (notePath) {
-          note = { content: await readTextIfExists(notePath) }
+          const versions = await snapshotNote(root, nodeId, 'ai')
+          note = { content: await readTextIfExists(notePath), versions }
         }
+        await settleOutputNotes()
         emit({ nodeId, type: 'done', ok: false, error: String(err), ...(note ? { note } : {}) })
       }
     }
@@ -1152,6 +1298,27 @@ function registerNoteIpc(): void {
     if (path) await fs.writeFile(path, content)
   })
 
+  // Make an old version the live content again. The current content is
+  // snapshotted first (a 'user' version), so a restore never destroys
+  // anything — it only brings a past state back to the front.
+  ipcMain.handle(
+    'note:restore',
+    async (
+      _event,
+      nodeId: string,
+      index: number
+    ): Promise<{ content: string; versions: NoteVersion[] } | null> => {
+      const root = folderRoot
+      const path = root && isSafeNodeId(nodeId) ? notePathFor(root, nodeId) : null
+      if (!root || !path) return null
+      const versions = await snapshotNote(root, nodeId, 'user')
+      const target = versions[index]
+      if (!target) return null
+      await fs.writeFile(path, target.content)
+      return { content: target.content, versions }
+    }
+  )
+
   ipcMain.handle('note:delete', async (_event, nodeId: string): Promise<void> => {
     const root = folderRoot
     if (!root || !isSafeNodeId(nodeId)) return
@@ -1160,7 +1327,7 @@ function registerNoteIpc(): void {
     const doomed = [
       ...(path ? [path] : []),
       legacyNoteFileFor(root, nodeId), // pre-migration leftovers, if any
-      legacyNoteVersionsFileFor(root, nodeId)
+      noteVersionsFileFor(root, nodeId)
     ]
     for (const file of doomed) {
       try {
@@ -1183,6 +1350,7 @@ async function writeCanvasFile(root: string, doc: CanvasDoc): Promise<void> {
       const copy = { ...node }
       delete copy.messages
       delete copy.content
+      delete copy.noteVersions
       delete copy.file
       delete copy.dataUrl
       const file =
@@ -1253,6 +1421,7 @@ function registerCanvasIpc(): void {
           if (node.kind === 'note') {
             const path = notePathFor(root, node.id)
             node.content = path ? await readTextIfExists(path) : ''
+            node.noteVersions = await readNoteVersions(root, node.id)
             if (node.updatedAt == null && path) node.updatedAt = await mtimeOf(path)
             return
           }

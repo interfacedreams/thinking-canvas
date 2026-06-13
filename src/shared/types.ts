@@ -35,6 +35,23 @@ export interface PersistedMessage {
   uuid?: string // SDK assistant-message uuid — the fork anchor (resumeSessionAt)
 }
 
+/** One snapshot of a note's content. The live content is the note's .md file;
+ *  these are the prior states preserved each time the boundary is crossed —
+ *  'user' captured before an AI turn (so unversioned edits aren't lost) and
+ *  'ai' captured after it. */
+export interface NoteVersion {
+  content: string
+  author: 'user' | 'ai'
+  at: string // ISO timestamp
+}
+
+/** A note's version history — .canvas/notes/<nodeId>.versions.json, beside the
+ *  live title-named .md file. Never written into canvas.json. */
+export interface NoteDoc {
+  version: 1
+  versions: NoteVersion[]
+}
+
 /** A fork that hasn't materialized yet — applied on the node's first send. */
 export interface ForkRef {
   sessionId: string
@@ -73,6 +90,9 @@ export interface PersistedNode {
   messages?: PersistedMessage[]
   // Hydrated from the note's file on load; never written into canvas.json.
   content?: string
+  // Hydrated from the note's .versions.json sidecar on load; never written
+  // into canvas.json (history is large and saves alongside the .md instead).
+  noteVersions?: NoteVersion[]
   minimized?: boolean
   sessionId?: string
   forkOf?: ForkRef
@@ -89,9 +109,11 @@ export interface PersistedEdge {
   source: string
   target: string
   // 'fork' chains chat sessions; 'context' feeds a note into a chat's system
-  // prompt; 'derive' records that a note was generated from this source node
-  // (any node → note). Omitted means 'fork' (canvases that predate the rest).
-  kind?: 'fork' | 'context' | 'derive'
+  // prompt (read-only); 'output' wires a chat → note so the chat can read AND
+  // write that note (it edits the note's file directly); 'derive' records that
+  // a note was generated from this source node (any node → note). Omitted means
+  // 'fork' (canvases that predate the rest).
+  kind?: 'fork' | 'context' | 'output' | 'derive'
   /** Fork edges only: the message in the source chat the edge anchors on. */
   sourceMessageId?: string
 }
@@ -127,6 +149,27 @@ export const DEFAULT_MODEL: ModelId = 'claude-sonnet-4-6'
 // Cheap one-shot background jobs (chat titles) always run on the small model,
 // regardless of the user's picker choice.
 export const TITLE_MODEL: ModelId = 'claude-haiku-4-5'
+
+// --- Thinking effort ---
+
+// How much thinking/reasoning the model applies to a turn. The id maps straight
+// to the Agent SDK's `effort` option; main validates against this list. The
+// emoji is the at-a-glance badge shown next to the model picker; the label is
+// the word shown in the dropdown menu. Ordered low → high so the menu reads as
+// a ramp. The SDK gracefully falls back when a model doesn't support a level
+// (e.g. 'xhigh'/'max' degrade to 'high'), so we offer them all.
+export const EFFORT_OPTIONS = [
+  { id: 'low', label: 'Low', emoji: '💤' },
+  { id: 'medium', label: 'Medium', emoji: '🤔' },
+  { id: 'high', label: 'High', emoji: '🧠' },
+  { id: 'xhigh', label: 'X-High', emoji: '🔥' },
+  { id: 'max', label: 'Max', emoji: '🚀' }
+] as const
+
+export type EffortId = (typeof EFFORT_OPTIONS)[number]['id']
+
+// 'high' is the SDK's own default for adaptive-thinking models.
+export const DEFAULT_EFFORT: EffortId = 'high'
 
 // --- File IPC (renderer ⇄ main) ---
 
@@ -189,6 +232,8 @@ export interface ThreadSendArgs {
   sessionId?: string
   /** Model for this turn; main falls back to DEFAULT_MODEL when absent or unknown. */
   model?: string
+  /** Thinking effort for this turn; main falls back to DEFAULT_EFFORT when absent or unknown. */
+  effort?: string
   /** Fork the parent session at this message instead of resuming `sessionId`. */
   forkFrom?: ForkRef
   /** 'note' runs an editing turn against the note's markdown file instead of a chat. */
@@ -204,6 +249,10 @@ export interface ThreadSendArgs {
   contextFiles?: ContextFile[]
   /** Links (web pages) connected to this chat by context edges. */
   contextLinks?: ContextLink[]
+  /** Notes this chat may write, wired by output edges (chat → note). Their
+   *  content rides the system prompt like contextNotes, but the chat is also
+   *  told it may edit the files; main mirrors and versions any change back. */
+  outputNotes?: ContextNote[]
 }
 
 // --- Global permission settings ---
@@ -257,8 +306,10 @@ export type ThreadEvent =
   | { nodeId: string; type: 'permission'; request: PermissionRequest }
   // The request settled (user clicked, or the turn was aborted) — dismiss the prompt.
   | { nodeId: string; type: 'permission-resolved'; requestId: string }
-  // Note turns: the agent's edit landed on disk — mirror the fresh content live.
-  | { nodeId: string; type: 'note-content'; content: string }
+  // An agent's edit landed on disk — mirror the fresh content live. nodeId is
+  // the note's own id (for an output write it's a different node than the chat
+  // that's streaming). versions rides the final settle so history stays live.
+  | { nodeId: string; type: 'note-content'; content: string; versions?: NoteVersion[] }
   | {
       nodeId: string
       type: 'done'
@@ -266,6 +317,7 @@ export type ThreadEvent =
       error?: string
       messageUuid?: string // uuid of the turn's final assistant message (fork anchor)
       usage?: TurnUsage
-      /** Note turns: the note's settled content after the turn. */
-      note?: { content: string }
+      /** Note turns: the note's settled content after the turn, plus its
+       *  version history (the 'ai' snapshot is taken as the turn settles). */
+      note?: { content: string; versions?: NoteVersion[] }
     }

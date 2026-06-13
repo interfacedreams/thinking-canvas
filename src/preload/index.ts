@@ -5,6 +5,7 @@ import type {
   CanvasDoc,
   ChosenFile,
   FolderState,
+  NoteVersion,
   PermissionReply,
   PermissionSettings,
   PersistedMessage,
@@ -43,6 +44,11 @@ const api = {
       ipcRenderer.invoke('note:rename', nodeId, title),
     save: (nodeId: string, content: string): Promise<void> =>
       ipcRenderer.invoke('note:save', nodeId, content),
+    restore: (
+      nodeId: string,
+      index: number
+    ): Promise<{ content: string; versions: NoteVersion[] } | null> =>
+      ipcRenderer.invoke('note:restore', nodeId, index),
     delete: (nodeId: string): Promise<void> => ipcRenderer.invoke('note:delete', nodeId)
   },
   file: {

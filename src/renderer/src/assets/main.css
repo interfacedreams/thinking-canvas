@@ -42,8 +42,20 @@ body {
     transform 120ms ease,
     box-shadow 120ms ease;
 }
+/* A down chevron inside every connector — the canvas flows top-to-bottom, so
+   inputs and outputs alike point down (input drops into the node below it,
+   output sends down to the node it feeds). White on the palette-accent fill. */
+.ctx-handle.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='white'%20stroke-width='3'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M6%209l6%206%206-6'/%3E%3C/svg%3E")
+    center / 13px no-repeat;
+}
 /* Swell on hover / while a connection is over it. The translate must match
-   the side React Flow pinned the handle to: top (chats) vs bottom (notes). */
+   the side React Flow pinned the handle to: top (chats) vs bottom
+   (resources — notes, files, tabs). */
 .ctx-handle.react-flow__handle-top:hover,
 .ctx-handle.react-flow__handle-top.connectingfrom,
 .ctx-handle.react-flow__handle-top.connectingto,
@@ -218,6 +230,12 @@ body {
   margin: 0;
   line-height: 26px;
 }
+/* Separate consecutive paragraphs by one blank ruled line (a full 26px grid
+   step, so every line stays flush on the rules). Headings are untouched, so a
+   heading and its body still sit on adjacent lines. */
+.note-prose p + p {
+  margin-top: 26px;
+}
 .note-prose ul,
 .note-prose ol {
   padding-left: 1.5em;
@@ -228,10 +246,10 @@ body {
 .note-prose ol {
   list-style: decimal;
 }
-/* All heading levels render the same: a single-line heading still occupies
-   two ruled lines, but the glyphs sit on the lower rule (26px line box) with
-   an empty ruled line of padding above — so the air is at the top, not in
-   oversized type. Wrapped heading lines each add one 26px rule. */
+/* All heading levels render the same: a heading occupies exactly one 26px
+   ruled line, glyphs sized to sit in that line box with only the natural
+   leading above — body text on the lines above and below stays flush on the
+   grid. Wrapped heading lines each add one more 26px rule. */
 .note-prose h1,
 .note-prose h2,
 .note-prose h3,
@@ -241,7 +259,7 @@ body {
   font-weight: 600;
   font-size: 25px;
   line-height: 26px;
-  padding-top: 26px;
+  padding-top: 0;
 }
 .note-prose a {
   color: var(--color-blue-600);

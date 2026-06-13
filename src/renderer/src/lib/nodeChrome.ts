@@ -17,12 +17,20 @@ export const CHIP_BUTTON_ACTIVE =
 export const DRAG_HEADER = 'drag-handle cursor-grab active:cursor-grabbing'
 
 // The context connector: the grabbable shape floating just outside every
-// note and image (below them) and chat (above it) — so a source sitting above
-// a chat reads as a clean downward flow. Notes and images drag from theirs;
-// chats receive. One id serves all since handle ids are scoped per node.
-// Notes wear a square, everything else a circle — the same shape coding the
-// sidebar list uses.
+// resource (notes, images, tabs — below them) and chat (above it) — so a
+// source sitting above a chat reads as a clean downward flow. Resources drag
+// from theirs; chats receive. One id serves all since handle ids are scoped
+// per node. Resources wear a square, chats a circle — the same shape coding
+// the sidebar list uses. Both sit the same distance (15px) outside their node.
 export const CTX_HANDLE_ID = 'ctx'
+
+// The output connector wires a chat → note (the chat may write the note). The
+// chat emits from a circle below it (OUTPUT_HANDLE_ID); the note receives into
+// a square above it (INPUT_HANDLE_ID). Distinct ids from CTX_HANDLE_ID so a
+// chat (top input + bottom output) and a note (bottom output + top input) can
+// each carry both ports without a within-node id collision.
+export const OUTPUT_HANDLE_ID = 'ctx-out'
+export const INPUT_HANDLE_ID = 'ctx-in'
 
 // Sizing/placement is inline because React Flow's stylesheet pins handles to
 // a 6px dot; hover/snap effects live in main.css under .ctx-handle.

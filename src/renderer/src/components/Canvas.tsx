@@ -22,6 +22,7 @@ import ContextConnectOverlay from './ContextConnectOverlay'
 import BeeIcon from './BeeIcon'
 import ActionsLegend from './ActionsLegend'
 import ModelSelector from './ModelSelector'
+import EffortSelector from './EffortSelector'
 import FolderChip from './FolderChip'
 import Sidebar from './Sidebar'
 import AuthKeyButton from './AuthKeyButton'
@@ -29,9 +30,9 @@ import SettingsButton from './SettingsButton'
 import PlacementOverlay from './PlacementOverlay'
 import DeleteChatModal from './DeleteChatModal'
 import ExpandedPanel from './ExpandedPanel'
-import { useCanvasStore, NODE_W } from '../store/canvas'
+import { useCanvasStore, NODE_W, isChat, isNote } from '../store/canvas'
 import type { ChosenFile } from '../../../shared/types'
-import { CTX_HANDLE_ID } from '../lib/nodeChrome'
+import { CTX_HANDLE_ID, OUTPUT_HANDLE_ID, INPUT_HANDLE_ID } from '../lib/nodeChrome'
 import { paletteFor } from '../lib/palette'
 import { useSpawn } from '../lib/useSpawn'
 
@@ -65,6 +66,7 @@ function CanvasInner(): React.JSX.Element {
   const folder = useCanvasStore((s) => s.folder)
   const onNodesChange = useCanvasStore((s) => s.onNodesChange)
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
+  const addOutputEdge = useCanvasStore((s) => s.addOutputEdge)
   const addNodeAt = useCanvasStore((s) => s.addNodeAt)
   const addNoteAt = useCanvasStore((s) => s.addNoteAt)
   const addLinkAt = useCanvasStore((s) => s.addLinkAt)
@@ -134,11 +136,18 @@ function CanvasInner(): React.JSX.Element {
   // re-validates.
   const handleConnect = useCallback(
     (conn: Connection) => {
-      addContextEdge(conn.source, conn.target)
+      // A drag from a chat's bottom circle to a note's top square is an output
+      // edge (chat writes note); everything else is a resource → chat context
+      // edge. Route by node kind — the stores re-validate either way.
+      const nodes = useCanvasStore.getState().nodes
+      const src = nodes.find((n) => n.id === conn.source)
+      const tgt = nodes.find((n) => n.id === conn.target)
+      if (src && tgt && isChat(src) && isNote(tgt)) addOutputEdge(conn.source, conn.target)
+      else addContextEdge(conn.source, conn.target)
       // a drag-connect landing mid click-to-connect supersedes it
       useCanvasStore.getState().setCtxConnectSource(null)
     },
-    [addContextEdge]
+    [addContextEdge, addOutputEdge]
   )
 
   // Electron's default for a dropped file is to navigate the window to it —
@@ -304,6 +313,28 @@ function CanvasInner(): React.JSX.Element {
                   selectable: false
                 }
               }
+              if (e.kind === 'output') {
+                // output connectors run the chat's bottom circle → the note's
+                // top square in the chat's accent, arrowhead on the note end.
+                // Same renderer as context; only the handles differ.
+                return {
+                  id: e.id,
+                  source: e.source,
+                  target: e.target,
+                  sourceHandle: OUTPUT_HANDLE_ID,
+                  targetHandle: INPUT_HANDLE_ID,
+                  type: 'context',
+                  style: { stroke: accent, strokeWidth: 3 },
+                  markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                    color: accent,
+                    width: 14,
+                    height: 14
+                  },
+                  focusable: false,
+                  selectable: false
+                }
+              }
               if (e.kind === 'derive') {
                 // derive connectors run source's right edge → note's left edge
                 // in the source's accent, arrowhead marking the note it made
@@ -391,6 +422,7 @@ function CanvasInner(): React.JSX.Element {
         <div
           className={`absolute top-4 right-4 z-20 flex items-center gap-2 ${split ? 'hidden' : ''}`}
         >
+          {loaded && folder?.current && <EffortSelector />}
           {loaded && folder?.current && <ModelSelector />}
           <FolderChip />
         </div>

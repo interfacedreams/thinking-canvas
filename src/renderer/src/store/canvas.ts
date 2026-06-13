@@ -1,27 +1,32 @@
 import { create } from 'zustand'
 import { applyNodeChanges, type Node, type NodeChange, type Viewport } from '@xyflow/react'
-import { DEFAULT_MODEL, MODEL_OPTIONS } from '../../../shared/types'
+import { DEFAULT_EFFORT, DEFAULT_MODEL, EFFORT_OPTIONS, MODEL_OPTIONS } from '../../../shared/types'
 import type {
   CanvasDoc,
   ChosenFile,
   ContextFile,
   ContextLink,
+  EffortId,
   FileKind,
   FolderState,
   ForkRef,
   ModelId,
+  NoteVersion,
   PermissionRequest,
   PersistedEdge,
   PersistedMessage,
   TurnUsage
 } from '../../../shared/types'
-import { nextColorId } from '../lib/palette'
+import { contrastColorId, nextColorId } from '../lib/palette'
 import { extractPageMarkdown } from '../lib/pageText'
 
 export const NODE_W = 600
 export const MAX_NODE_H = 1280
 const MIN_GROW_H = 280
 export const GAP = 24
+// A derived note sits further right than a plain spawn — two background-dot
+// units (the dot grid is 44px) of breathing room between source and summary.
+export const DERIVE_GAP = 88
 
 /**
  * Tallest a node should auto-grow. Node heights live in flow coordinates; on
@@ -74,6 +79,12 @@ export interface NoteData {
   title: string
   color?: string
   content: string // live markdown, mirror of the note's title-named file
+  // Prior content snapshots, oldest first — kept each time an AI turn touches
+  // the note. The live content is `content`; these are the history behind it.
+  versions: NoteVersion[]
+  // Runtime-only: index into `versions` of the snapshot being viewed (read-
+  // only). undefined means viewing the live, editable content.
+  viewVersion?: number
   status: 'idle' | 'streaming'
   draft: string // the AI-instruction composer
   lastReply?: string // the AI's brief commentary from its latest editing turn
@@ -203,12 +214,32 @@ function makeNoteNode(position: { x: number; y: number }, partial?: Partial<Note
     data: {
       title: '',
       content: '',
+      versions: [],
       status: 'idle',
       draft: '',
       minimized: false,
       ...partial
     }
   }
+}
+
+/**
+ * The version pager's derived state. Positions run 1..total, where the last
+ * position is always the live (editable) content. When the live content has
+ * drifted from the latest snapshot — unversioned user edits — it earns its own
+ * extra trailing position so those edits are reachable too.
+ */
+export function notePager(data: {
+  versions: NoteVersion[]
+  content: string
+  viewVersion?: number
+}): { total: number; position: number; viewingOld: boolean } {
+  const { versions } = data
+  const drifted = versions.length > 0 && data.content !== versions[versions.length - 1].content
+  const total = versions.length === 0 ? 1 : versions.length + (drifted ? 1 : 0)
+  const viewingOld = data.viewVersion !== undefined && data.viewVersion < versions.length
+  const position = viewingOld ? data.viewVersion! + 1 : total
+  return { total, position, viewingOld }
 }
 
 function makeFileNode(
@@ -275,7 +306,7 @@ export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string>
   while (grew) {
     grew = false
     for (const e of edges) {
-      if (e.kind === 'context' || e.kind === 'derive') continue
+      if (e.kind === 'context' || e.kind === 'output' || e.kind === 'derive') continue
       if (ids.has(e.source) && !ids.has(e.target)) {
         ids.add(e.target)
         grew = true
@@ -317,6 +348,8 @@ interface CanvasState {
   folder: FolderState | null // null until the first folder:get answers
   model: ModelId // model for new turns; persisted app-wide in localStorage
   setModel: (model: ModelId) => void
+  effort: EffortId // thinking effort for new turns; persisted app-wide in localStorage
+  setEffort: (effort: EffortId) => void
   // Runtime-only: per node, the y-offset (flow px from the node top) of each
   // message that an edge anchors on — measured from the DOM by ChatNodeView so
   // fork edges can attach to the message itself rather than the node center.
@@ -378,6 +411,10 @@ interface CanvasState {
   setTitle: (id: string, title: string) => void
   commitNoteTitle: (id: string) => Promise<void>
   setNoteContent: (id: string, content: string) => void
+  // Version pager: view a past snapshot read-only (undefined = live content),
+  // or bring one back to the front (snapshots current first, never destructive).
+  setViewVersion: (id: string, index: number | undefined) => void
+  restoreVersion: (id: string, index: number) => Promise<void>
   send: (id: string) => void
   retry: (id: string) => void
   sendNote: (id: string) => Promise<void>
@@ -387,11 +424,19 @@ interface CanvasState {
   // Derive a fresh note from any node + an instruction: spawn a note to the
   // right wired back by a 'derive' edge, then run an editing turn grounded in
   // the source (a chat forks its session; a note/file/link rides as context).
-  deriveNote: (sourceId: string, instruction: string) => Promise<string | null>
+  // With inPlace (note sources only), skip the spawn and rewrite the source
+  // note itself — the turn lands as a new version in its own history.
+  deriveNote: (
+    sourceId: string,
+    instruction: string,
+    inPlace?: boolean
+  ) => Promise<string | null>
   // Context edges: a note, file, or link feeding a chat's system prompt
   // (note/file/link → chat only).
   addContextEdge: (sourceId: string, chatId: string) => void
   removeContextEdge: (edgeId: string) => void
+  // Wire a chat → note so the chat can read AND write that note.
+  addOutputEdge: (chatId: string, noteId: string) => void
   discardNode: (id: string) => void
   toggleMinimize: (id: string) => void
   load: () => Promise<Viewport | null>
@@ -405,6 +450,13 @@ const MODEL_STORAGE_KEY = 'bee-claude:model'
 function loadModel(): ModelId {
   const saved = localStorage.getItem(MODEL_STORAGE_KEY)
   return MODEL_OPTIONS.some((m) => m.id === saved) ? (saved as ModelId) : DEFAULT_MODEL
+}
+
+// Thinking effort is an app-wide preference too — same localStorage home.
+const EFFORT_STORAGE_KEY = 'bee-claude:effort'
+function loadEffort(): EffortId {
+  const saved = localStorage.getItem(EFFORT_STORAGE_KEY)
+  return EFFORT_OPTIONS.some((e) => e.id === saved) ? (saved as EffortId) : DEFAULT_EFFORT
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -543,6 +595,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           : []
       })
 
+  // Notes this chat may write, wired by output edges (chat → note). Their
+  // content rides the system prompt like contextNotes; main also permits and
+  // mirrors edits to their files.
+  const outputNotesFor = (id: string): { id: string; title: string; content: string }[] =>
+    get()
+      .edges.filter((e) => e.kind === 'output' && e.source === id)
+      .flatMap((e) => {
+        const tgt = get().nodes.find((n) => n.id === e.target)
+        return tgt && isNote(tgt)
+          ? [{ id: tgt.id, title: tgt.data.title || 'Untitled note', content: tgt.data.content }]
+          : []
+      })
+
   // Files wired to a chat go along as paths; main injects the bytes of any
   // the session hasn't seen (isNew, stamped by send/retry) into the turn's
   // user message. A file whose attach hasn't landed yet (no path) sits out.
@@ -649,6 +714,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     loaded: false,
     folder: null,
     model: loadModel(),
+    effort: loadEffort(),
     anchorOffsets: {},
     pendingDeleteId: null,
     placing: null,
@@ -685,6 +751,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     setModel: (model) => {
       set({ model })
       localStorage.setItem(MODEL_STORAGE_KEY, model)
+    },
+
+    setEffort: (effort) => {
+      set({ effort })
+      localStorage.setItem(EFFORT_STORAGE_KEY, effort)
     },
 
     expandNode: (id, mode = 'panel') => {
@@ -888,6 +959,26 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       )
     },
 
+    setViewVersion: (id, index) => patchData(id, { viewVersion: index }),
+
+    restoreVersion: async (id, index) => {
+      const node = get().nodes.find((n) => n.id === id)
+      if (!node || !isNote(node) || node.data.status === 'streaming') return
+      // Any pending keystrokes must reach disk first — main snapshots the live
+      // file before overwriting it, and that snapshot has to be current.
+      await flushNoteSave(id)
+      const res = await window.api.note.restore(id, index)
+      if (res) {
+        patchData(id, {
+          content: res.content,
+          versions: res.versions,
+          viewVersion: undefined,
+          updatedAt: Date.now()
+        })
+        persist()
+      }
+    },
+
     toggleResearch: (id) => {
       const node = get().nodes.find((n) => n.id === id)
       if (node && isChat(node)) patchData(id, { researchArmed: !node.data.researchArmed })
@@ -960,12 +1051,35 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     // source forks its session at the tip (full context, images, and prompt
     // cache ride along for free); a document source feeds the note turn as
     // context the same way it would feed a chat. The output is always a note.
-    deriveNote: async (sourceId, instruction) => {
+    deriveNote: async (sourceId, instruction, inPlace = false) => {
       const source = get().nodes.find((n) => n.id === sourceId)
       const text = instruction.trim()
       if (!source || !text) return null
       // Don't fork a chat mid-stream — its tip isn't settled yet.
       if (isChat(source) && source.data.status === 'streaming') return null
+
+      // Edit-in-place: rewrite the source note itself instead of deriving a
+      // new one. The editing turn connects to the source note's own file, so
+      // the prior content snapshots into its history and the rewrite lands as
+      // a new version (visible via the pager) — no new node, no edge.
+      if (inPlace && isNote(source)) {
+        if (source.data.status === 'streaming') return null
+        patchData(sourceId, {
+          status: 'streaming',
+          growthCap: viewportFitHeight(get().viewport.zoom),
+          viewVersion: undefined, // an editing turn always lands on the live content
+          updatedAt: Date.now()
+        })
+        void window.api.thread.send({
+          nodeId: sourceId,
+          text,
+          model: get().model,
+          effort: get().effort,
+          kind: 'note',
+          noteTitle: source.data.title || 'Untitled note'
+        })
+        return sourceId
+      }
 
       // A chat source rides a session fork when it has a forkable tip; without
       // one (empty chat, a research transcript with no session) its transcript
@@ -981,16 +1095,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         }
       }
 
-      const wanted = text.slice(0, 60)
       // Right of the source, same level — deliberately plain placement
       // (overlapping a neighbor is fine). Spawned unselected: sharing a
       // selection with the source would make React Flow drag them as a unit.
       const p = boxOf(source)
       const node = makeNoteNode(
-        { x: p.x + p.w + GAP, y: p.y },
+        { x: p.x + p.w + DERIVE_GAP, y: p.y },
         {
-          title: wanted,
-          color: source.data.color,
+          // Left untitled: the note shows a "…" placeholder while it streams and
+          // gets a real title from its content once the turn lands (see the
+          // thread-event handler) — never the raw instruction.
+          title: '',
+          // The note wears the wrapper's color — a palette color chosen to
+          // differ from the source, so it reads as derived-from but distinct.
+          color: contrastColorId(source.data.color),
           status: 'streaming',
           growthCap: viewportFitHeight(get().viewport.zoom),
           updatedAt: Date.now()
@@ -1005,13 +1123,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
       persist()
 
-      // The editing turn needs the note's file on disk under its real title
-      // (create allocates "Untitled"; rename moves it, dodging collisions).
+      // The editing turn writes by node id, so the file can stay "Untitled"
+      // (create allocates it, suffixing to dodge collisions); once the turn
+      // finishes, generateTitle renames it to match the generated title.
       await window.api.note.create(node.id)
-      const slot = await window.api.note.rename(node.id, wanted)
-      if (slot && slot.title !== wanted) patchData(node.id, { title: slot.title })
-      persist() // canvas.json picks up the filename from main
-      const noteTitle = slot?.title ?? wanted
+      const noteTitle = 'Untitled note'
 
       // Build the document feed (a chat source rides forkFrom instead).
       const contextNotes: { id: string; title: string; content: string }[] = []
@@ -1060,6 +1176,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           nodeId: node.id,
           text,
           model: get().model,
+          effort: get().effort,
           kind: 'note',
           noteTitle,
           ...(forkFrom ? { forkFrom } : {}),
@@ -1087,6 +1204,20 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     removeContextEdge: (edgeId) => {
       set((s) => ({ edges: s.edges.filter((e) => e.id !== edgeId) }))
+      persist()
+    },
+
+    addOutputEdge: (chatId, noteId) => {
+      const s = get()
+      const src = s.nodes.find((n) => n.id === chatId)
+      const tgt = s.nodes.find((n) => n.id === noteId)
+      // chat → note only; research chats can't edit, so they can't drive a note
+      if (!src || !tgt || !isChat(src) || src.data.kind === 'research' || !isNote(tgt)) return
+      if (s.edges.some((e) => e.kind === 'output' && e.source === chatId && e.target === noteId))
+        return // already connected
+      set((st) => ({
+        edges: [...st.edges, { id: uid(), source: chatId, target: noteId, kind: 'output' }]
+      }))
       persist()
     },
 
@@ -1153,7 +1284,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   growthCap,
                   updatedAt: Date.now(),
                   lastError: undefined, // a fresh send supersedes any failed turn
-                  title: node.data.title || text.slice(0, 60),
+                  // title is left as-is: an unnamed chat shows a "…" placeholder
+                  // and gets a real title from its content once the turn lands
+                  // (see the thread-event handler) — never the raw prompt.
                   researchArmed: false // one-shot: research applies to this send only
                 }
               } as CanvasNode)
@@ -1164,6 +1297,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persistThread(id) // the user message is part of the durable transcript now
 
       const contextNotes = contextNotesFor(id)
+      const outputNotes = outputNotesFor(id)
       // Only files the session hasn't seen carry bytes this turn; remember
       // them so a successful turn marks them injected.
       const injected = new Set(node.data.injectedImages ?? [])
@@ -1184,12 +1318,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           text,
           sessionId: node.data.sessionId,
           model: get().model,
+          effort: get().effort,
           // first send of a forked node: fork the parent session at the anchor
           ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
           ...(node.data.researchArmed ? { research: true } : {}),
           ...(contextNotes.length > 0 ? { contextNotes } : {}),
           ...(contextFiles.length > 0 ? { contextFiles } : {}),
-          ...(contextLinks.length > 0 ? { contextLinks } : {})
+          ...(contextLinks.length > 0 ? { contextLinks } : {}),
+          ...(outputNotes.length > 0 ? { outputNotes } : {})
         })
       })()
     },
@@ -1232,6 +1368,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
 
       const contextNotes = contextNotesFor(id)
+      const outputNotes = outputNotesFor(id)
       const injected = new Set(node.data.injectedImages ?? [])
       const contextFiles = contextFilesFor(id).map((f) => ({
         ...f,
@@ -1247,11 +1384,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           text: lastUser.text,
           sessionId: node.data.sessionId,
           model: get().model,
+          effort: get().effort,
           // the failed turn may have been a fork's first send — fork again
           ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
           ...(contextNotes.length > 0 ? { contextNotes } : {}),
           ...(contextFiles.length > 0 ? { contextFiles } : {}),
-          ...(contextLinks.length > 0 ? { contextLinks } : {})
+          ...(contextLinks.length > 0 ? { contextLinks } : {}),
+          ...(outputNotes.length > 0 ? { outputNotes } : {})
         })
       })()
     },
@@ -1276,6 +1415,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   status: 'streaming' as const,
                   lastReply: '',
                   growthCap,
+                  viewVersion: undefined, // an editing turn always lands on the live content
                   updatedAt: Date.now()
                 }
               } as CanvasNode)
@@ -1289,6 +1429,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         text,
         sessionId: node.data.sessionId,
         model: get().model,
+        effort: get().effort,
         kind: 'note',
         noteTitle: node.data.title
       })
@@ -1359,6 +1500,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                 title: p.title,
                 color: p.color,
                 content: p.content ?? '',
+                versions: p.noteVersions ?? [],
                 status: 'idle',
                 minimized: p.minimized ?? false,
                 savedHeight,
@@ -1392,6 +1534,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     }
   }
 })
+
+// Fallback title from a block of text — the first non-empty line, stripped of
+// leading markdown heading/bullet markers and capped. Used when the one-shot
+// title turn fails, so a finished node never sits on "…" forever.
+function titleFromText(text: string): string {
+  const line =
+    text
+      .split('\n')
+      .map((l) => l.trim())
+      .find(Boolean) ?? ''
+  return line
+    .replace(/^#+\s*/, '')
+    .replace(/^[-*+]\s+/, '')
+    .slice(0, 60)
+    .trim()
+}
+
+// Name a node in the background once its first turn lands: ask Haiku for a
+// concise title from `source` (a chat's opening exchange or a note's content)
+// and install it — unless the user has named the node in the meantime, whose
+// title always wins. A failed turn falls back to `fallback`; for notes the file
+// is renamed to match.
+function generateTitle(
+  nodeId: string,
+  source: string,
+  fallback: string,
+  isNoteNode: boolean
+): void {
+  void window.api.thread.title(source).then((title) => {
+    const next = title || fallback
+    if (!next) return
+    const cur = useCanvasStore.getState().nodes.find((n) => n.id === nodeId)
+    if (!cur || cur.data.title) return // user renamed it first — their title wins
+    useCanvasStore.getState().setTitle(nodeId, next)
+    if (isNoteNode) void useCanvasStore.getState().commitNoteTitle(nodeId)
+  })
+}
 
 // Stream events from the main process (one Agent SDK query per turn, any number of
 // nodes streaming concurrently). Registered once at module load.
@@ -1479,7 +1658,11 @@ window.api.thread.onEvent((event) => {
       useCanvasStore.getState().persistSoon()
     }
   } else if (event.type === 'note-content') {
-    patch(event.nodeId, (node) => (isNote(node) ? { content: event.content } : {}))
+    patch(event.nodeId, (node) =>
+      isNote(node)
+        ? { content: event.content, ...(event.versions ? { versions: event.versions } : {}) }
+        : {}
+    )
   } else if (event.type === 'permission') {
     patch(event.nodeId, () => ({ pendingPermission: event.request }))
   } else if (event.type === 'permission-resolved') {
@@ -1509,9 +1692,15 @@ window.api.thread.onEvent((event) => {
           status: 'idle',
           pendingPermission: undefined,
           updatedAt: Date.now(),
+          viewVersion: undefined, // land back on the live content after the turn
           ...(event.usage ? { lastUsage: event.usage } : {}),
-          // adopt the turn's settled content
-          ...(event.note ? { content: event.note.content } : {}),
+          // adopt the turn's settled content + version history
+          ...(event.note
+            ? {
+                content: event.note.content,
+                ...(event.note.versions ? { versions: event.note.versions } : {})
+              }
+            : {}),
           ...(warning ? { lastReply: (node.data.lastReply ?? '') + warning } : {})
         }
       }
@@ -1555,26 +1744,29 @@ window.api.thread.onEvent((event) => {
     // updatedAt (and injectedImages) round-trip through canvas.json — make them durable.
     useCanvasStore.getState().persistSoon()
 
-    // First successful exchange still wearing its send-time stub (the opening
-    // message's first 60 chars): swap in a real title from a one-shot Haiku
-    // turn in the background. A user rename — before or during — wins.
+    // A turn landed on a still-unnamed node: name it from a one-shot Haiku turn
+    // in the background — a chat from its opening exchange, a note from its
+    // content. Until that returns the node shows a "…" placeholder; a user
+    // rename (before or during) always wins.
     if (event.ok) {
       const node = useCanvasStore.getState().nodes.find((n) => n.id === event.nodeId)
-      if (node && isChat(node) && node.data.kind !== 'research') {
-        const firstUser = node.data.messages.find((m) => m.role === 'user')
-        const stub = firstUser?.text.slice(0, 60)
-        if (stub && node.data.title === stub) {
+      if (node && !node.data.title) {
+        if (isChat(node) && node.data.kind !== 'research') {
+          const firstUser = node.data.messages.find((m) => m.role === 'user')
           const reply = node.data.messages.find((m) => m.role === 'assistant' && m.text)
-          const conversation =
-            `User: ${firstUser!.text.slice(0, 1500)}\n\n` +
-            `Assistant: ${(reply?.text ?? '').slice(0, 1500)}`
-          void window.api.thread.title(conversation).then((title) => {
-            if (!title) return
-            const cur = useCanvasStore.getState().nodes.find((n) => n.id === event.nodeId)
-            if (cur && cur.data.title === stub) {
-              useCanvasStore.getState().setTitle(event.nodeId, title)
-            }
-          })
+          if (firstUser && reply?.text) {
+            const conversation =
+              `User: ${firstUser.text.slice(0, 1500)}\n\n` +
+              `Assistant: ${reply.text.slice(0, 1500)}`
+            generateTitle(event.nodeId, conversation, titleFromText(reply.text), false)
+          }
+        } else if (isNote(node) && node.data.content) {
+          generateTitle(
+            event.nodeId,
+            node.data.content.slice(0, 3000),
+            titleFromText(node.data.content),
+            true
+          )
         }
       }
     }
