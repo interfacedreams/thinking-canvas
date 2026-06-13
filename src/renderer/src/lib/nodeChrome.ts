@@ -5,6 +5,12 @@
 export const CHIP_BUTTON =
   'nodrag flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-(--np-chip) text-(--np-deep) transition-colors hover:bg-(--np-accent)'
 
+// The "you are here" variant: a chip marking the current state (e.g. the
+// open panel's active size). Filled accent, no hover — it reads as selected
+// rather than actionable.
+export const CHIP_BUTTON_ACTIVE =
+  'flex h-9 w-9 shrink-0 cursor-default items-center justify-center rounded-lg bg-(--np-accent) text-white'
+
 // The header band is the node's only drag surface — React Flow matches its
 // `drag-handle` class via the node's dragHandle selector (see store/canvas.ts).
 // Interactive children opt out with `nodrag` (CHIP_BUTTON includes it).

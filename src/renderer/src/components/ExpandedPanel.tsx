@@ -1,7 +1,7 @@
-import { Maximize2, Minimize2, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { Maximize2, PanelRight, X } from 'lucide-react'
 import { useCanvasStore, isChat, isLink, isNote } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
-import { CHIP_BUTTON } from '../lib/nodeChrome'
+import { CHIP_BUTTON, CHIP_BUTTON_ACTIVE } from '../lib/nodeChrome'
 import ChatBody from './ChatBody'
 import NoteBody from './NoteBody'
 import FileBody from './FileBody'
@@ -72,49 +72,50 @@ export default function ExpandedPanel(): React.JSX.Element | null {
           : 'flex h-screen w-[min(52vw,880px)] shrink-0 flex-col border-l border-(--np-edge)'
       }
     >
-      {/* colored header band — the same chrome the node wears on the canvas */}
+      {/* colored header band — the same chrome the node wears on the canvas.
+          The band runs full-width; its content centers to the reading column
+          in full mode so the title lines up with the body below. */}
       <div
         style={{ backgroundColor: palette.bg }}
-        className="flex shrink-0 items-center gap-2 border-b border-(--np-edge) px-3 py-1.5"
+        className="shrink-0 border-b border-(--np-edge) px-3 py-1.5"
       >
-        <span
-          className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${
-            data.title ? '' : 'opacity-50'
-          }`}
-        >
-          {data.title || untitled}
-        </span>
-        <span className="shrink-0 text-[13px] text-(--np-deep) opacity-50">
-          <kbd className="rounded-[4px] border border-(--np-deep)/40 px-1.5 py-0.5 text-[11px] font-semibold">
-            Esc
-          </kbd>{' '}
-          to close
-        </span>
-        {/* flip to the other size without going back to the card */}
-        <button
-          type="button"
-          onClick={() => expandNode(node.id, full ? 'panel' : 'full')}
-          title={full ? 'Dock to the side' : 'Go full screen'}
-          className={CHIP_BUTTON}
-        >
-          {full ? (
-            <PanelRightOpen className="h-[25px] w-[25px]" />
-          ) : (
+        <div className={`flex w-full items-center gap-2 ${full ? 'mx-auto max-w-3xl' : ''}`}>
+          {/* close + size controls on the left, mirroring the node card's
+              chrome. The X closes back to the canvas card; full and half-sheet
+              are always both present (click either to switch), with the current
+              size highlighted as a "you are here" marker. */}
+          <button
+            type="button"
+            onClick={collapseExpanded}
+            title="Close (Esc)"
+            className={CHIP_BUTTON}
+          >
+            <X className="h-[25px] w-[25px]" />
+          </button>
+          <button
+            type="button"
+            onClick={() => expandNode(node.id, 'full')}
+            title="Full screen"
+            className={full ? CHIP_BUTTON_ACTIVE : CHIP_BUTTON}
+          >
             <Maximize2 className="h-[22px] w-[22px]" />
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={collapseExpanded}
-          title={full ? 'Close full screen (Esc)' : 'Close side panel (Esc)'}
-          className={CHIP_BUTTON}
-        >
-          {full ? (
-            <Minimize2 className="h-[22px] w-[22px]" />
-          ) : (
-            <PanelRightClose className="h-[25px] w-[25px]" />
-          )}
-        </button>
+          </button>
+          <button
+            type="button"
+            onClick={() => expandNode(node.id, 'panel')}
+            title="Half sheet"
+            className={full ? CHIP_BUTTON : CHIP_BUTTON_ACTIVE}
+          >
+            <PanelRight className="h-[25px] w-[25px]" />
+          </button>
+          <span
+            className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${
+              data.title ? '' : 'opacity-50'
+            }`}
+          >
+            {data.title || untitled}
+          </span>
+        </div>
       </div>
 
       {chat ? (

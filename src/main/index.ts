@@ -866,7 +866,7 @@ function registerThreadIpc(): void {
           | { type: 'image'; source: { type: 'base64'; media_type: ImageMime; data: string } }
           | { type: 'document'; source: { type: 'base64'; media_type: PdfMime; data: string } }
         > = []
-        for (const f of notePath ? [] : validFiles.filter((i) => i.isNew)) {
+        for (const f of validFiles.filter((i) => i.isNew)) {
           const mime = fileMimeFor(f.file)
           if (!mime) continue
           try {

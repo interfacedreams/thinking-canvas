@@ -89,8 +89,9 @@ export interface PersistedEdge {
   source: string
   target: string
   // 'fork' chains chat sessions; 'context' feeds a note into a chat's system
-  // prompt. Omitted means 'fork' (canvases that predate context edges).
-  kind?: 'fork' | 'context'
+  // prompt; 'derive' records that a note was generated from this source node
+  // (any node → note). Omitted means 'fork' (canvases that predate the rest).
+  kind?: 'fork' | 'context' | 'derive'
   /** Fork edges only: the message in the source chat the edge anchors on. */
   sourceMessageId?: string
 }

@@ -267,14 +267,15 @@ function tooClose(a: Rect, b: Rect): boolean {
 }
 
 /** A node plus every chat forked from it, transitively (fork edges run source → target).
- *  Context edges don't count — a note feeding a chat doesn't own it. */
+ *  Context and derive edges don't count — a note feeding (or derived from) a
+ *  chat is its own free-stander, not owned by the chat. */
 export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string> {
   const ids = new Set([rootId])
   let grew = true
   while (grew) {
     grew = false
     for (const e of edges) {
-      if (e.kind === 'context') continue
+      if (e.kind === 'context' || e.kind === 'derive') continue
       if (ids.has(e.source) && !ids.has(e.target)) {
         ids.add(e.target)
         grew = true
@@ -336,6 +337,11 @@ interface CanvasState {
   // until a click on a chat commits the edge — or any other click / Esc cancels.
   ctxConnectSource: string | null
   setCtxConnectSource: (id: string | null) => void
+  // Runtime-only: the node currently wrapped in transform mode — a dashed,
+  // colored temporary frame with a one-shot composer floating above it (its
+  // instruction runs deriveNote). One node at a time; Esc / the × clears it.
+  transforming: string | null
+  setTransforming: (id: string | null) => void
   // Runtime-only: the node open out of its canvas card — either right-docked
   // ('panel', the canvas stays live beside it) or covering the window ('full').
   // Both render the same body; only the container's size differs, so flipping
@@ -378,6 +384,10 @@ interface CanvasState {
   toggleResearch: (id: string) => void
   respondPermission: (id: string, requestId: string, allow: boolean) => void
   forkChat: (nodeId: string) => string | null
+  // Derive a fresh note from any node + an instruction: spawn a note to the
+  // right wired back by a 'derive' edge, then run an editing turn grounded in
+  // the source (a chat forks its session; a note/file/link rides as context).
+  deriveNote: (sourceId: string, instruction: string) => Promise<string | null>
   // Context edges: a note, file, or link feeding a chat's system prompt
   // (note/file/link → chat only).
   addContextEdge: (sourceId: string, chatId: string) => void
@@ -511,6 +521,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       viewport: { x: 0, y: 0, zoom: 1 },
       placing: null,
       pendingFile: null,
+      transforming: null,
       expanded: null
     })
     const vp = await get().load()
@@ -643,6 +654,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     placing: null,
     pendingFile: null,
     ctxConnectSource: null,
+    transforming: null,
     expanded: null,
 
     // The pending image lives and dies with file-placement mode.
@@ -667,6 +679,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     setCtxConnectSource: (id) => set({ ctxConnectSource: id }),
+
+    setTransforming: (id) => set({ transforming: id }),
 
     setModel: (model) => {
       set({ model })
@@ -938,6 +952,122 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         edges: [...s.edges, edge]
       }))
       persist()
+      return node.id
+    },
+
+    // Generalizes the old "distill chat → note": works from any node, with a
+    // free-form instruction, and leaves a visible derive edge behind. A chat
+    // source forks its session at the tip (full context, images, and prompt
+    // cache ride along for free); a document source feeds the note turn as
+    // context the same way it would feed a chat. The output is always a note.
+    deriveNote: async (sourceId, instruction) => {
+      const source = get().nodes.find((n) => n.id === sourceId)
+      const text = instruction.trim()
+      if (!source || !text) return null
+      // Don't fork a chat mid-stream — its tip isn't settled yet.
+      if (isChat(source) && source.data.status === 'streaming') return null
+
+      // A chat source rides a session fork when it has a forkable tip; without
+      // one (empty chat, a research transcript with no session) its transcript
+      // is serialized into a context block instead.
+      const chatSource = isChat(source)
+      let forkFrom: ForkRef | undefined
+      if (chatSource) {
+        const anchor = [...source.data.messages]
+          .reverse()
+          .find((m) => m.role === 'assistant' && m.uuid)
+        if (anchor?.uuid && source.data.sessionId) {
+          forkFrom = { sessionId: source.data.sessionId, messageUuid: anchor.uuid }
+        }
+      }
+
+      const wanted = text.slice(0, 60)
+      // Right of the source, same level — deliberately plain placement
+      // (overlapping a neighbor is fine). Spawned unselected: sharing a
+      // selection with the source would make React Flow drag them as a unit.
+      const p = boxOf(source)
+      const node = makeNoteNode(
+        { x: p.x + p.w + GAP, y: p.y },
+        {
+          title: wanted,
+          color: source.data.color,
+          status: 'streaming',
+          growthCap: viewportFitHeight(get().viewport.zoom),
+          updatedAt: Date.now()
+        }
+      )
+      set((st) => ({
+        nodes: [...st.nodes, node],
+        edges: [
+          ...st.edges,
+          { id: uid(), source: sourceId, target: node.id, kind: 'derive' as const }
+        ]
+      }))
+      persist()
+
+      // The editing turn needs the note's file on disk under its real title
+      // (create allocates "Untitled"; rename moves it, dodging collisions).
+      await window.api.note.create(node.id)
+      const slot = await window.api.note.rename(node.id, wanted)
+      if (slot && slot.title !== wanted) patchData(node.id, { title: slot.title })
+      persist() // canvas.json picks up the filename from main
+      const noteTitle = slot?.title ?? wanted
+
+      // Build the document feed (a chat source rides forkFrom instead).
+      const contextNotes: { id: string; title: string; content: string }[] = []
+      const contextFiles: ContextFile[] = []
+      if (!chatSource && isNote(source)) {
+        contextNotes.push({
+          id: source.id,
+          title: source.data.title || 'Untitled note',
+          content: source.data.content
+        })
+      } else if (!chatSource && isFile(source) && source.data.file) {
+        contextFiles.push({
+          id: source.id,
+          title:
+            source.data.title || (source.data.kind === 'pdf' ? 'Untitled PDF' : 'Untitled image'),
+          file: source.data.file,
+          isNew: true
+        })
+      } else if (chatSource && !forkFrom) {
+        // No forkable session — hand the transcript over as a context block.
+        const transcript = source.data.messages
+          .filter((m) => m.text)
+          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+          .join('\n\n')
+        if (transcript) {
+          contextNotes.push({
+            id: source.id,
+            title: source.data.title || 'Chat',
+            content: transcript
+          })
+        }
+      }
+
+      void (async () => {
+        const contextLinks =
+          !chatSource && isLink(source) && source.data.url
+            ? await withPageContent([
+                {
+                  id: source.id,
+                  title: source.data.title || hostTitle(source.data.url) || 'Untitled link',
+                  url: source.data.url
+                }
+              ])
+            : []
+        void window.api.thread.send({
+          nodeId: node.id,
+          text,
+          model: get().model,
+          kind: 'note',
+          noteTitle,
+          ...(forkFrom ? { forkFrom } : {}),
+          ...(contextNotes.length > 0 ? { contextNotes } : {}),
+          ...(contextFiles.length > 0 ? { contextFiles } : {}),
+          ...(contextLinks.length > 0 ? { contextLinks } : {})
+        })
+      })()
       return node.id
     },
 

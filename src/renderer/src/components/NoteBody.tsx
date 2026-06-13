@@ -3,6 +3,7 @@ import { useCanvasStore, isNote } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
 import NoteEditor, { type NoteEditorHandle } from './NoteEditor'
+import PermissionPrompt from './PermissionPrompt'
 
 /**
  * A note's ruled-paper editor body, driven by the node id straight from the
@@ -26,6 +27,7 @@ export default function NoteBody({
   const node = useCanvasStore((s) => s.nodes.find((n) => n.id === id))
   const setNoteContent = useCanvasStore((s) => s.setNoteContent)
   const discardNode = useCanvasStore((s) => s.discardNode)
+  const respondPermission = useCanvasStore((s) => s.respondPermission)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const data = node && isNote(node) ? node.data : undefined
@@ -53,20 +55,48 @@ export default function NoteBody({
         }}
         className="nowheel select-text transcript-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-1 text-[15px] leading-[26px] text-neutral-900"
       >
-        <NoteEditor
-          ref={editorRef}
-          content={data.content}
-          readOnly={streaming}
-          onChange={(md) => setNoteContent(id, md)}
-          onEscape={() => {
-            if (blank) discardNode(id)
-          }}
-        />
-        {/* same typing indicator as chat replies, while the AI writes */}
-        {streaming && (
+        {/* While the AI is writing into an as-yet-empty note, stand in a clear
+            generating line for the empty "Write a note…" placeholder — the note
+            is busy, not idle. Once content starts landing, the editor takes
+            over and a trailing pulse marks the still-streaming tail. */}
+        {streaming && !data.content ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-neutral-400">
+            <span className="animate-pulse text-[18px] leading-none tracking-widest">●●●</span>
+            <span className="text-[13px]">Writing the note…</span>
+          </div>
+        ) : (
+          <NoteEditor
+            ref={editorRef}
+            content={data.content}
+            readOnly={streaming}
+            onChange={(md) => setNoteContent(id, md)}
+            onEscape={() => {
+              if (blank) discardNode(id)
+            }}
+          />
+        )}
+        {streaming && data.content && (
           <div className="animate-pulse px-3 py-1 tracking-widest text-neutral-400">●●●</div>
         )}
       </div>
+
+      {/* A tool the editing turn fired needs the user's OK — without this the
+          turn would stall invisibly (the note just never fills in). */}
+      {data.pendingPermission && (
+        <PermissionPrompt
+          request={data.pendingPermission}
+          onRespond={(allow) => respondPermission(id, data.pendingPermission!.requestId, allow)}
+        />
+      )}
+
+      {/* The AI's brief commentary from its last turn — and, when a turn fails,
+          the ⚠️ reason — so a failed transform says so instead of leaving an
+          empty note behind. */}
+      {!streaming && data.lastReply && (
+        <div className="nodrag mt-1 shrink-0 rounded-[10px] bg-white/70 px-3 py-2 text-[13px] leading-snug whitespace-pre-wrap text-neutral-600">
+          {data.lastReply}
+        </div>
+      )}
     </div>
   )
 }

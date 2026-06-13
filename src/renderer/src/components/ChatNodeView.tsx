@@ -15,6 +15,8 @@ import { usePanel } from '../lib/usePanel'
 import ChatBody, { type ChatBodyHandle } from './ChatBody'
 import DockedStub from './DockedStub'
 import PanelChips from './PanelChips'
+import TransformButton from './TransformButton'
+import TransformFrame from './TransformFrame'
 import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
@@ -121,10 +123,11 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
           '--np-ring': `${palette.accent}B3` // selection ring at 70%
         } as React.CSSProperties
       }
-      className={`flex h-full w-full flex-col rounded-[14px] border border-black/5 shadow-md ${
+      className={`relative flex h-full w-full flex-col rounded-[14px] border border-black/5 shadow-md ${
         selected ? 'ring-2 ring-(--np-ring)' : ''
       }`}
     >
+      <TransformFrame id={id} />
       {/* invisible anchors so fork edges have somewhere to attach */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
@@ -254,6 +257,7 @@ function ChatNodeView({ id, data, selected }: NodeProps<ChatNode>): React.JSX.El
               <GitFork className="h-[25px] w-[25px]" />
             </button>
           )}
+          {!data.minimized && <TransformButton id={id} />}
           <button
             type="button"
             onClick={() => requestDelete(id)}

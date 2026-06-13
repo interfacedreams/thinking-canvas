@@ -17,6 +17,7 @@ import FileNodeView from './FileNodeView'
 import LinkNodeView from './LinkNodeView'
 import ForkEdge from './ForkEdge'
 import ContextEdge from './ContextEdge'
+import DeriveEdge from './DeriveEdge'
 import ContextConnectOverlay from './ContextConnectOverlay'
 import BeeIcon from './BeeIcon'
 import ActionsLegend from './ActionsLegend'
@@ -40,7 +41,7 @@ const nodeTypes: NodeTypes = {
   file: FileNodeView,
   link: LinkNodeView
 }
-const edgeTypes: EdgeTypes = { fork: ForkEdge, context: ContextEdge }
+const edgeTypes: EdgeTypes = { fork: ForkEdge, context: ContextEdge, derive: DeriveEdge }
 
 /** The pasted text as an http(s) URL — null unless the whole paste is one
  *  link (a scheme'd URL, or a bare domain like nuwapen.com/about). */
@@ -71,6 +72,11 @@ function CanvasInner(): React.JSX.Element {
   const setStoreViewport = useCanvasStore((s) => s.setViewport)
   const init = useCanvasStore((s) => s.init)
   const chooseFolder = useCanvasStore((s) => s.chooseFolder)
+  // Split screen (a docked panel beside a live canvas): hide the corner pickers
+  // and legends so the narrowed canvas stays uncluttered. They're hidden, not
+  // unmounted, so each keeps its own collapse state for when split exits. (Full
+  // screen needs no handling — its overlay already covers them.)
+  const split = useCanvasStore((s) => s.expanded?.mode === 'panel')
   const { setViewport, setCenter, getViewport, fitView, screenToFlowPosition } = useReactFlow()
   const spawn = useSpawn()
 
@@ -298,6 +304,25 @@ function CanvasInner(): React.JSX.Element {
                   selectable: false
                 }
               }
+              if (e.kind === 'derive') {
+                // derive connectors run source's right edge → note's left edge
+                // in the source's accent, arrowhead marking the note it made
+                return {
+                  id: e.id,
+                  source: e.source,
+                  target: e.target,
+                  type: 'derive',
+                  style: { stroke: accent, strokeWidth: 3 },
+                  markerEnd: {
+                    type: MarkerType.ArrowClosed,
+                    color: accent,
+                    width: 14,
+                    height: 14
+                  },
+                  focusable: false,
+                  selectable: false
+                }
+              }
               return {
                 id: e.id,
                 source: e.source,
@@ -345,7 +370,8 @@ function CanvasInner(): React.JSX.Element {
 
         {loaded && (
           <div className="absolute bottom-4 left-4 z-10 flex items-end gap-2">
-            {folder?.current && <Sidebar />}
+            {/* hidden (not unmounted) in split screen so Recent keeps its state */}
+            <div className={split ? 'hidden' : 'contents'}>{folder?.current && <Sidebar />}</div>
             <AuthKeyButton />
             <SettingsButton />
           </div>
@@ -357,11 +383,14 @@ function CanvasInner(): React.JSX.Element {
             the placement layer (z-10), so an armed spawn button can still be
             clicked to disarm — same as when the header sat over the canvas. */}
         {loaded && folder?.current && (
-          <div className="absolute top-4 left-4 z-20">
+          <div className={`absolute top-4 left-4 z-20 ${split ? 'hidden' : ''}`}>
             <ActionsLegend />
           </div>
         )}
-        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        {/* Model + Folder pickers sit under the docked panel — hide in split screen */}
+        <div
+          className={`absolute top-4 right-4 z-20 flex items-center gap-2 ${split ? 'hidden' : ''}`}
+        >
           {loaded && folder?.current && <ModelSelector />}
           <FolderChip />
         </div>

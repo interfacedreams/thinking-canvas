@@ -13,6 +13,8 @@ import { usePanel } from '../lib/usePanel'
 import FileBody from './FileBody'
 import DockedStub from './DockedStub'
 import PanelChips from './PanelChips'
+import TransformButton from './TransformButton'
+import TransformFrame from './TransformFrame'
 import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
@@ -69,10 +71,11 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
           '--np-ring': `${palette.accent}B3`
         } as React.CSSProperties
       }
-      className={`flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
+      className={`relative flex h-full w-full flex-col rounded-[14px] border border-(--np-edge) shadow-md ${
         selected ? 'ring-2 ring-(--np-ring)' : ''
       }`}
     >
+      <TransformFrame id={id} />
       {/* hidden layout anchors (left/right) for any future edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
@@ -182,6 +185,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
               <Pencil className="h-[25px] w-[25px]" />
             </button>
           )}
+          {!data.minimized && <TransformButton id={id} />}
           <button
             type="button"
             onClick={() => requestDelete(id)}
