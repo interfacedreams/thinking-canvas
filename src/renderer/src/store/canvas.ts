@@ -400,8 +400,17 @@ interface CanvasState {
   // webview can only be mounted once. Esc or a chip closes it; the frame is
   // never touched.
   expanded: { id: string; mode: PanelMode } | null
+  // A browsing session in the side panel: the ordered link tabs opened by
+  // clicking links in chat/note bodies. expanded.id is whichever is active
+  // (mounted); the rest are stubs on the canvas. Empty for a normal single-
+  // node panel (a chat/note/file opened via its own chip). Closing the panel
+  // clears it; the tabs stay as separate cards on the canvas.
+  panelTabs: string[]
   expandNode: (id: string, mode?: PanelMode) => void
   collapseExpanded: () => void
+  // Drop one tab from the strip (its node stays on the canvas). If it was the
+  // active tab, focus drops to a neighbor — or the panel closes if it was last.
+  closePanelTab: (id: string) => void
   requestDelete: (id: string) => void
   cancelDelete: () => void
   deleteChat: (id: string, cascade: boolean) => void
@@ -416,6 +425,10 @@ interface CanvasState {
   // With a URL (a paste) the tab is born showing the page; without one it
   // opens on the search-or-link input.
   addLinkAt: (position: { x: number; y: number }, url?: string) => LinkNode
+  // A link clicked inside a chat/note body: materialize a tab next to the
+  // source node and open it in the half-sheet panel, so the page reads beside
+  // the work instead of hijacking the window. Returns the tab's node id.
+  openLinkInPanel: (url: string, sourceId?: string) => string
   // Commit the URL a tab embeds; an untitled node takes the hostname.
   setLinkUrl: (id: string, url: string) => void
   // The tab's guest navigated — track its current URL (frame untouched).
@@ -487,9 +500,9 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined
 const noteSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 // Debounced per-note index-description regeneration (pinned notes only).
 const describeTimers = new Map<string, ReturnType<typeof setTimeout>>()
-// Researchers streaming right now: `${leadNodeId}:${toolUseId}` → child node id.
+// Researchers running right now: `${leadNodeId}:${toolUseId}` → {parentId, msgId} in lead.
 // Mid-turn only, so it lives outside the store (no re-renders, never persisted).
-const researchChildren = new Map<string, string>()
+const researchChildren = new Map<string, { parentId: string; msgId: string }>()
 // File ids riding the in-flight turn as image/document blocks, per chat node.
 // Marked injected only when the turn lands ok — a failed turn re-sends them
 // on retry.
@@ -604,7 +617,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       placing: null,
       pendingFile: null,
       transforming: null,
-      expanded: null
+      expanded: null,
+      panelTabs: []
     })
     const vp = await get().load()
     return vp ?? { x: 0, y: 0, zoom: 1 } // fresh folder: reset the view
@@ -772,6 +786,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     ctxConnectSource: null,
     transforming: null,
     expanded: null,
+    panelTabs: [],
 
     // The pending image lives and dies with file-placement mode.
     setPlacing: (kind) =>
@@ -810,10 +825,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
     expandNode: (id, mode = 'panel') => {
       if (!get().nodes.some((n) => n.id === id)) return
-      set({ expanded: { id, mode } })
+      // Switching to a tab already in the browsing strip keeps the strip;
+      // expanding anything else starts a fresh single-node panel.
+      set((s) => ({
+        expanded: { id, mode },
+        ...(s.panelTabs.includes(id) ? {} : { panelTabs: [] })
+      }))
     },
 
-    collapseExpanded: () => set({ expanded: null }),
+    collapseExpanded: () => set({ expanded: null, panelTabs: [] }),
+
+    closePanelTab: (id) => {
+      set((s) => {
+        const remaining = s.panelTabs.filter((t) => t !== id)
+        if (s.expanded?.id !== id) return { panelTabs: remaining }
+        // Closing the active tab: fall to its right neighbor, else its left.
+        const at = s.panelTabs.indexOf(id)
+        const next = remaining[at] ?? remaining[at - 1]
+        return next
+          ? { panelTabs: remaining, expanded: { id: next, mode: s.expanded.mode } }
+          : { panelTabs: [], expanded: null }
+      })
+    },
 
     requestDelete: (id) => {
       if (isClaudeMd(id)) return // CLAUDE.md is permanent
@@ -829,6 +862,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         pendingDeleteId: null,
         // deleting the panel-open node closes the panel with it
         ...(s.expanded && doomed.has(s.expanded.id) ? { expanded: null } : {}),
+        // and drops any deleted tabs from the browsing strip
+        ...(s.panelTabs.some((t) => doomed.has(t))
+          ? { panelTabs: s.panelTabs.filter((t) => !doomed.has(t)) }
+          : {}),
         nodes: s.nodes.filter((n) => !doomed.has(n.id)),
         edges: s.edges.filter((e) => !doomed.has(e.source) && !doomed.has(e.target))
       }))
@@ -906,6 +943,31 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       })
       if (url) node.height = LINK_FRAME.height
       return adopt(node)
+    },
+
+    openLinkInPanel: (url, sourceId) => {
+      // Drop the tab just right of the node the link was clicked in (so its
+      // canvas card has a sensible home), or at the viewport's top-left when
+      // there's no source. adopt doesn't dodge overlaps, so cascade each new
+      // tab of the session down-right of the last — without it, several links
+      // from one chat would stack exactly, hidden behind each other once the
+      // panel closes. The tab opens straight into the panel regardless; the
+      // cascade only matters for where its card lands on the canvas.
+      const src = sourceId ? get().nodes.find((n) => n.id === sourceId) : undefined
+      const vp = get().viewport
+      const step = get().panelTabs.length * GAP
+      const base = src
+        ? { x: src.position.x + (src.width ?? NODE_W) + GAP, y: src.position.y }
+        : { x: (-vp.x + 80) / vp.zoom, y: (-vp.y + 80) / vp.zoom }
+      const position = { x: base.x + step, y: base.y + step }
+      const node = get().addLinkAt(position, url)
+      // Append to the browsing strip and bring the fresh tab to the front —
+      // a clicked link opens in the foreground, like a browser.
+      set((s) => ({
+        panelTabs: [...s.panelTabs.filter((t) => t !== node.id), node.id],
+        expanded: { id: node.id, mode: 'panel' }
+      }))
+      return node.id
     },
 
     setLinkUrl: (id, url) => {
@@ -1333,6 +1395,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const node = get().nodes.find((n) => n.id === id)
       set((s) => ({
         ...(s.expanded?.id === id ? { expanded: null } : {}),
+        ...(s.panelTabs.includes(id) ? { panelTabs: s.panelTabs.filter((t) => t !== id) } : {}),
         nodes: s.nodes.filter((n) => n.id !== id),
         edges: s.edges.filter((e) => e.source !== id && e.target !== id)
       }))
@@ -1559,90 +1622,91 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         edges: doc.edges ?? [],
         nodes: ensureClaudeMd(
           doc.nodes.map((p) => {
-          const frame = {
-            id: p.id,
-            width: p.width,
-            ...(p.height != null && !p.minimized ? { height: Math.min(p.height, cap) } : {})
-          }
-          const savedHeight = p.minimized && p.height != null ? Math.min(p.height, cap) : undefined
-          if (p.kind === 'file') {
-            // File frames are explicit and aspect-true — no screen-fit clamp.
-            return {
-              ...makeFileNode(
-                p.position,
-                {
-                  width: p.width,
-                  ...(p.height != null && !p.minimized ? { height: p.height } : {})
-                },
-                {
-                  title: p.title,
-                  color: p.color,
-                  kind: p.file?.toLowerCase().endsWith('.pdf')
-                    ? ('pdf' as const)
-                    : ('image' as const),
-                  file: p.file,
-                  dataUrl: p.dataUrl,
-                  minimized: p.minimized ?? false,
-                  ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
-                }
-              ),
-              id: p.id
-            }
-          }
-          if (p.kind === 'link') {
-            const node = makeLinkNode(p.position, {
-              title: p.title,
-              color: p.color,
-              url: p.url,
-              minimized: p.minimized ?? false,
-              ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
-            })
-            return {
-              ...node,
+            const frame = {
               id: p.id,
               width: p.width,
-              // minimized links collapse to the title row (no explicit height)
-              height: p.height != null && !p.minimized ? p.height : undefined
+              ...(p.height != null && !p.minimized ? { height: Math.min(p.height, cap) } : {})
             }
-          }
-          if (p.kind === 'note') {
-            return {
-              ...makeNoteNode(p.position, {
+            const savedHeight =
+              p.minimized && p.height != null ? Math.min(p.height, cap) : undefined
+            if (p.kind === 'file') {
+              // File frames are explicit and aspect-true — no screen-fit clamp.
+              return {
+                ...makeFileNode(
+                  p.position,
+                  {
+                    width: p.width,
+                    ...(p.height != null && !p.minimized ? { height: p.height } : {})
+                  },
+                  {
+                    title: p.title,
+                    color: p.color,
+                    kind: p.file?.toLowerCase().endsWith('.pdf')
+                      ? ('pdf' as const)
+                      : ('image' as const),
+                    file: p.file,
+                    dataUrl: p.dataUrl,
+                    minimized: p.minimized ?? false,
+                    ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
+                  }
+                ),
+                id: p.id
+              }
+            }
+            if (p.kind === 'link') {
+              const node = makeLinkNode(p.position, {
                 title: p.title,
                 color: p.color,
-                content: p.content ?? '',
-                versions: p.noteVersions ?? [],
-                ...(p.pinned ? { pinned: true } : {}),
-                ...(p.description ? { description: p.description } : {}),
-                ...(p.system ? { system: p.system } : {}),
-                status: 'idle',
+                url: p.url,
+                minimized: p.minimized ?? false,
+                ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
+              })
+              return {
+                ...node,
+                id: p.id,
+                width: p.width,
+                // minimized links collapse to the title row (no explicit height)
+                height: p.height != null && !p.minimized ? p.height : undefined
+              }
+            }
+            if (p.kind === 'note') {
+              return {
+                ...makeNoteNode(p.position, {
+                  title: p.title,
+                  color: p.color,
+                  content: p.content ?? '',
+                  versions: p.noteVersions ?? [],
+                  ...(p.pinned ? { pinned: true } : {}),
+                  ...(p.description ? { description: p.description } : {}),
+                  ...(p.system ? { system: p.system } : {}),
+                  status: 'idle',
+                  minimized: p.minimized ?? false,
+                  savedHeight,
+                  growthCap: cap,
+                  sessionId: p.sessionId,
+                  updatedAt: p.updatedAt
+                }),
+                ...frame
+              }
+            }
+            return {
+              ...makeNode(p.position, {
+                title: p.title,
+                color: p.color,
+                messages: p.messages ?? [],
+                status: p.title || (p.messages?.length ?? 0) > 0 ? 'idle' : 'empty',
                 minimized: p.minimized ?? false,
                 savedHeight,
                 growthCap: cap,
                 sessionId: p.sessionId,
-                updatedAt: p.updatedAt
+                forkOf: p.forkOf,
+                injectedImages: p.injectedImages,
+                updatedAt: p.updatedAt,
+                ...(p.kind === 'research' ? { kind: 'research' as const } : {})
               }),
               ...frame
             }
-          }
-          return {
-            ...makeNode(p.position, {
-              title: p.title,
-              color: p.color,
-              messages: p.messages ?? [],
-              status: p.title || (p.messages?.length ?? 0) > 0 ? 'idle' : 'empty',
-              minimized: p.minimized ?? false,
-              savedHeight,
-              growthCap: cap,
-              sessionId: p.sessionId,
-              forkOf: p.forkOf,
-              injectedImages: p.injectedImages,
-              updatedAt: p.updatedAt,
-              ...(p.kind === 'research' ? { kind: 'research' as const } : {})
-            }),
-            ...frame
-          }
-        })
+          })
         )
       })
       return doc.viewport
@@ -1723,62 +1787,36 @@ window.api.thread.onEvent((event) => {
       }
     })
   } else if (event.type === 'spawn') {
-    // The lead called the Agent tool — give the researcher its own child node,
-    // wired to the lead's streaming assistant message like a fork edge.
-    const s = useCanvasStore.getState()
-    const parent = s.nodes.find((n) => n.id === event.nodeId)
-    if (!parent || !isChat(parent)) return
-    const anchor = parent.data.messages[parent.data.messages.length - 1]
-    const siblingIds = new Set(
-      s.edges
-        .filter((e) => e.source === parent.id && e.sourceMessageId === anchor?.id)
-        .map((e) => e.target)
-    )
-    const child = makeNode(
-      findForkSpot(
-        s.nodes,
-        parent,
-        s.nodes.filter((n) => siblingIds.has(n.id))
-      ),
-      {
-        kind: 'research',
-        title: event.description,
-        color: parent.data.color,
-        status: 'streaming',
-        growthCap: parent.data.growthCap,
-        // Born collapsed — the header dots show it's working; expand to watch.
-        minimized: true,
-        messages: [{ id: uid(), role: 'assistant', text: '' }]
-      }
-    )
-    researchChildren.set(`${event.nodeId}:${event.toolUseId}`, child.id)
-    setState((st) => ({
-      nodes: [...st.nodes, child],
-      edges: [
-        ...st.edges,
-        { id: uid(), source: parent.id, target: child.id, sourceMessageId: anchor?.id ?? '' }
-      ]
-    }))
-    useCanvasStore.getState().persistSoon()
-  } else if (event.type === 'childDelta') {
-    const childId = researchChildren.get(`${event.nodeId}:${event.toolUseId}`)
-    if (!childId) return // late delta for a child we never spawned — drop it
-    patch(childId, (node) => {
+    // The lead called the Agent tool — show an inline status chip in the parent chat.
+    const msgId = uid()
+    researchChildren.set(`${event.nodeId}:${event.toolUseId}`, {
+      parentId: event.nodeId,
+      msgId
+    })
+    patch(event.nodeId, (node) => {
       if (!isChat(node)) return {}
-      const last = node.data.messages[node.data.messages.length - 1]
-      if (!last || last.role !== 'assistant') return {}
       return {
-        messages: [...node.data.messages.slice(0, -1), { ...last, text: last.text + event.text }]
+        messages: [
+          ...node.data.messages,
+          { id: msgId, role: 'assistant' as const, text: event.description, kind: 'research-spawn' as const }
+        ]
       }
     })
+  } else if (event.type === 'childDelta') {
+    // Researcher content stays inside the lead's turn — drop streaming deltas.
   } else if (event.type === 'childDone') {
     const key = `${event.nodeId}:${event.toolUseId}`
-    const childId = researchChildren.get(key)
+    const entry = researchChildren.get(key)
     researchChildren.delete(key)
-    if (childId) {
-      patch(childId, () => ({ status: 'idle' }))
-      useCanvasStore.getState().persistThread(childId)
-      useCanvasStore.getState().persistSoon()
+    if (entry) {
+      patch(entry.parentId, (node) => {
+        if (!isChat(node)) return {}
+        return {
+          messages: node.data.messages.map((m) =>
+            m.id === entry.msgId ? { ...m, kind: 'research-done' as const } : m
+          )
+        }
+      })
     }
   } else if (event.type === 'note-content') {
     patch(event.nodeId, (node) =>
@@ -1814,13 +1852,19 @@ window.api.thread.onEvent((event) => {
         : {}
     )
   } else if (event.type === 'done') {
-    // Safety sweep: a turn that errored or aborted mid-research leaves no
-    // childDone behind — settle any of this lead's still-streaming children.
-    for (const [key, childId] of researchChildren) {
+    // Safety sweep: a turn that errored mid-research leaves no childDone — settle any
+    // still-pending inline research chips.
+    for (const [key, entry] of researchChildren) {
       if (key.startsWith(`${event.nodeId}:`)) {
         researchChildren.delete(key)
-        patch(childId, () => ({ status: 'idle' }))
-        useCanvasStore.getState().persistThread(childId)
+        patch(entry.parentId, (node) => {
+          if (!isChat(node)) return {}
+          return {
+            messages: node.data.messages.map((m) =>
+              m.id === entry.msgId ? { ...m, kind: 'research-done' as const } : m
+            )
+          }
+        })
       }
     }
     // Files that rode this turn are in the session now (only if it landed —

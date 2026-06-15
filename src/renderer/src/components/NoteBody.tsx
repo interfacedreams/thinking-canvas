@@ -1,10 +1,14 @@
 import { useRef, type Ref } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+import 'katex/dist/katex.min.css'
 import { History, RefreshCw } from 'lucide-react'
 import { useCanvasStore, isNote, notePager } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
+import { MarkdownSourceContext, markdownComponents } from '../lib/markdownLink'
 import NoteEditor, { type NoteEditorHandle } from './NoteEditor'
 import PermissionPrompt from './PermissionPrompt'
 
@@ -98,7 +102,15 @@ export default function NoteBody({
         {viewed ? (
           <div className="note-prose px-3 py-2 break-words opacity-80">
             {viewed.content ? (
-              <Markdown remarkPlugins={[remarkGfm]}>{viewed.content}</Markdown>
+              <MarkdownSourceContext.Provider value={id}>
+                <Markdown
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                  components={markdownComponents}
+                >
+                  {viewed.content}
+                </Markdown>
+              </MarkdownSourceContext.Provider>
             ) : (
               <span className="text-neutral-400 italic">Empty version</span>
             )}

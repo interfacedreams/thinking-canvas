@@ -37,7 +37,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
-  const { docked, mode, open, collapse } = usePanel(id)
+  const { docked, mode, open, stubAction } = usePanel(id)
 
   const titleRef = useRef<HTMLInputElement>(null)
 
@@ -228,7 +228,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
 
       {!data.minimized &&
         (docked ? (
-          <DockedStub onClick={collapse} />
+          <DockedStub onClick={stubAction} />
         ) : (
           // The body is the page (scroll, not drag) — only the header band
           // moves the node, like chats and notes.

@@ -5,9 +5,10 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { RotateCcw, Telescope, TriangleAlert } from 'lucide-react'
+import { RotateCcw, Telescope, TriangleAlert, Search, CheckCircle2 } from 'lucide-react'
 import { useCanvasStore, isChat, type Message } from '../store/canvas'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
+import { MarkdownSourceContext, markdownComponents } from '../lib/markdownLink'
 import BeeIcon from './BeeIcon'
 import PermissionPrompt from './PermissionPrompt'
 
@@ -28,6 +29,22 @@ function MessageView({
       </div>
     )
   }
+  if (message.kind === 'research-spawn' || message.kind === 'research-done') {
+    const done = message.kind === 'research-done'
+    return (
+      <div
+        data-msg={message.id}
+        className="mb-1 flex items-center gap-1.5 px-3 py-0.5 text-xs text-neutral-400"
+      >
+        {done ? (
+          <CheckCircle2 size={11} className="shrink-0 text-neutral-400" />
+        ) : (
+          <Search size={11} className="shrink-0 animate-pulse" />
+        )}
+        <span className={done ? '' : 'animate-pulse'}>{message.text}</span>
+      </div>
+    )
+  }
   if (pending && !message.text) {
     return (
       <div
@@ -40,7 +57,11 @@ function MessageView({
   }
   return (
     <div data-msg={message.id} className="prose-chat mb-2 px-3 py-1">
-      <Markdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+      <Markdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={markdownComponents}
+      >
         {message.text}
       </Markdown>
       {pending && <div className="animate-pulse tracking-widest text-neutral-400">●●●</div>}
@@ -155,7 +176,7 @@ const ChatBody = forwardRef<
   const canSend = !streaming && data.draft.trim().length > 0
 
   return (
-    <>
+    <MarkdownSourceContext.Provider value={id}>
       {/* empty transcript area sized so a fresh chat matches a fresh note
           (header + 172px reserved note body) */}
       {empty && <div className="min-h-[98px] flex-1" />}
@@ -254,7 +275,7 @@ const ChatBody = forwardRef<
           </div>
         </div>
       )}
-    </>
+    </MarkdownSourceContext.Provider>
   )
 })
 

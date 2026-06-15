@@ -35,6 +35,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant'
   text: string
   uuid?: string // SDK assistant-message uuid — the fork anchor (resumeSessionAt)
+  kind?: 'research-spawn' | 'research-done'
 }
 
 /** One snapshot of a note's content. The live content is the note's .md file;

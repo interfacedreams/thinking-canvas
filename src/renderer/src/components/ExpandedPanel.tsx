@@ -6,6 +6,7 @@ import ChatBody from './ChatBody'
 import NoteBody from './NoteBody'
 import FileBody from './FileBody'
 import TabBrowser, { LinkSearch } from './TabBrowser'
+import PanelTabStrip from './PanelTabStrip'
 
 // Same paper fill as the paper-bodied nodes (notes, files, tabs).
 const PAPER = '#FFFDF6'
@@ -73,13 +74,13 @@ export default function ExpandedPanel(): React.JSX.Element | null {
       }
     >
       {/* colored header band — the same chrome the node wears on the canvas.
-          The band runs full-width; its content centers to the reading column
-          in full mode so the title lines up with the body below. */}
+          Its content stays hard-left in both modes (the close/size controls and
+          title live in the corner), full-width. */}
       <div
         style={{ backgroundColor: palette.bg }}
         className="shrink-0 border-b border-(--np-edge) px-3 py-1.5"
       >
-        <div className={`flex w-full items-center gap-2 ${full ? 'mx-auto max-w-3xl' : ''}`}>
+        <div className="flex w-full items-center gap-2">
           {/* close + size controls on the left, mirroring the node card's
               chrome. The X closes back to the canvas card; full and half-sheet
               are always both present (click either to switch), with the current
@@ -94,19 +95,19 @@ export default function ExpandedPanel(): React.JSX.Element | null {
           </button>
           <button
             type="button"
-            onClick={() => expandNode(node.id, 'full')}
-            title="Full screen"
-            className={full ? CHIP_BUTTON_ACTIVE : CHIP_BUTTON}
-          >
-            <Maximize2 className="h-[22px] w-[22px]" />
-          </button>
-          <button
-            type="button"
             onClick={() => expandNode(node.id, 'panel')}
             title="Half sheet"
             className={full ? CHIP_BUTTON : CHIP_BUTTON_ACTIVE}
           >
             <PanelRight className="h-[25px] w-[25px]" />
+          </button>
+          <button
+            type="button"
+            onClick={() => expandNode(node.id, 'full')}
+            title="Full screen"
+            className={full ? CHIP_BUTTON_ACTIVE : CHIP_BUTTON}
+          >
+            <Maximize2 className="h-[22px] w-[22px]" />
           </button>
           <span
             className={`min-w-0 flex-1 truncate text-[26px] font-medium text-(--np-deep) ${
@@ -117,6 +118,10 @@ export default function ExpandedPanel(): React.JSX.Element | null {
           </span>
         </div>
       </div>
+
+      {/* the browsing strip — present only during a multi-link session, and
+          only in the half-sheet (full screen is single-page focused reading) */}
+      {!full && <PanelTabStrip />}
 
       {chat ? (
         <div className={`flex min-h-0 flex-1 flex-col px-2 ${reading}`}>

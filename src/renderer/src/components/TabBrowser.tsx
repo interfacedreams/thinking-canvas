@@ -292,6 +292,12 @@ export default function TabBrowser({
         <webview
           ref={webviewRef}
           src={initialUrl}
+          // Surface target=_blank / window.open / cmd-click to main's
+          // setWindowOpenHandler, which navigates this same guest (one tab per
+          // card) instead of opening a window — without this attribute Chromium
+          // blocks those clicks outright, so they appear to do nothing.
+          // eslint-disable-next-line react/no-unknown-property -- a real <webview> attribute (in React's own types); the lint rule just doesn't know the tag
+          allowpopups={true}
           // eslint-disable-next-line react/no-unknown-property -- a real <webview> attribute (in React's own types); the lint rule just doesn't know the tag
           partition={BROWSE_PARTITION}
           // eslint-disable-next-line react/no-unknown-property -- same as above

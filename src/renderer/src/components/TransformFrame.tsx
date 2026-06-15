@@ -151,6 +151,31 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
           <span style={{ fontSize: 23, fontWeight: 500, color: wrap.deep, opacity: 0.85 }}>
             Transform →
           </span>
+          {/* Non-note sources can only ever derive a fresh note, so there's no
+              choice to offer — show a single static "new note" target that wears
+              the same look as the active segment of the note toggle below. */}
+          {!sourceIsNote && (
+            <div
+              style={{
+                display: 'inline-flex',
+                padding: 3,
+                borderRadius: 9,
+                background: wrap.edge
+              }}
+            >
+              <span
+                className="rounded-md px-3 py-1"
+                style={{
+                  fontSize: 15,
+                  background: '#FFFFFF',
+                  color: wrap.deep,
+                  fontWeight: 600
+                }}
+              >
+                new note
+              </span>
+            </div>
+          )}
           {sourceIsNote && (
             <div
               style={{

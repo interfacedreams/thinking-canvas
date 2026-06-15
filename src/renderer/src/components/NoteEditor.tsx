@@ -5,6 +5,8 @@ import StarterKit from '@tiptap/starter-kit'
 import HardBreak from '@tiptap/extension-hard-break'
 import { Markdown } from '@tiptap/markdown'
 import { Placeholder } from '@tiptap/extensions'
+import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
+import 'katex/dist/katex.min.css'
 
 // Serialize hard breaks as backslash breaks ("\<newline>", CommonMark's other
 // hard-break syntax) instead of the default trailing double-space. That keeps
@@ -93,6 +95,11 @@ function NoteEditor({
         hardBreak: false // replaced by BackslashHardBreak
       }),
       BackslashHardBreak,
+      // KaTeX rendering for `$…$` (inline) and `$$…$$` (block) math. Both
+      // carry markdown tokenizers/serializers, so the `$`-delimited LaTeX the
+      // AI writes parses into rendered nodes and round-trips back to the file.
+      BlockMath.configure({ katexOptions: { throwOnError: false } }),
+      InlineMath.configure({ katexOptions: { throwOnError: false } }),
       Markdown,
       Placeholder.configure({ placeholder: 'Write a note…' })
     ],

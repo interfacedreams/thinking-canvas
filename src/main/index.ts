@@ -550,7 +550,8 @@ function decodeSecret(value: unknown): string | null {
     if (typeof enc === 'string' && safeStorage.isEncryptionAvailable()) {
       return safeStorage.decryptString(Buffer.from(enc, 'base64')) || null
     }
-    const plain = (value as { plain?: unknown; token?: unknown }).plain ?? (value as { token?: unknown }).token
+    const plain =
+      (value as { plain?: unknown; token?: unknown }).plain ?? (value as { token?: unknown }).token
     if (typeof plain === 'string' && plain) return plain
   }
   return null
@@ -1744,6 +1745,19 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Safety net: the app's own window must never navigate away to a page —
+  // that would tear down the whole renderer (the bug where a clicked link took
+  // over the window). The renderer routes link clicks into in-app tabs itself;
+  // anything that still slips through to a real navigation is bounced to the OS
+  // browser instead. The dev-server / file load that boots the app is allowed.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appUrl = process.env['ELECTRON_RENDERER_URL']
+    const isAppBoot = url.startsWith('file://') || (appUrl ? url.startsWith(appUrl) : false)
+    if (isAppBoot) return
+    event.preventDefault()
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+  })
+
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -1781,20 +1795,14 @@ app.whenReady().then(async () => {
       if (!/^https?:\/\//i.test(params.src ?? '')) event.preventDefault()
     })
     if (contents.getType() === 'webview') {
+      // A tab node is one tab on purpose: anything its page tries to pop open
+      // (target=_blank, window.open, ⌘-click) navigates that tab's own guest
+      // instead of spawning a window — so ⌘-click behaves exactly like a plain
+      // click. The guest needs the allowpopups attribute for these to surface
+      // here at all (set on the <webview> in TabBrowser). Plain in-page links
+      // navigate the guest directly and never reach this handler.
       contents.setWindowOpenHandler(({ url }) => {
-        if (/^https?:\/\//i.test(url)) {
-          // A tab node is one tab on purpose: anything its page tries to pop
-          // open (target=_blank, window.open) navigates that tab's own guest
-          // instead. Any guest outside the browse partition (none today)
-          // hands pop-opens to the system browser. fromPartition returns the
-          // same Session object for the same name, so identity comparison
-          // is sound.
-          if (contents.session === session.fromPartition(BROWSE_PARTITION)) {
-            void contents.loadURL(url)
-          } else {
-            void shell.openExternal(url)
-          }
-        }
+        if (/^https?:\/\//i.test(url)) void contents.loadURL(url)
         return { action: 'deny' }
       })
     }
