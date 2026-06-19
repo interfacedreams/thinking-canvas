@@ -384,6 +384,9 @@ export type ThreadEvent =
       type: 'done'
       ok: boolean
       error?: string
+      /** The turn never ran because no Claude credentials are set up — the
+       *  renderer surfaces this as a "set up a token" toast, not a node error. */
+      needsAuth?: boolean
       messageUuid?: string // uuid of the turn's final assistant message (fork anchor)
       usage?: TurnUsage
       /** Note turns: the note's settled content after the turn, plus its

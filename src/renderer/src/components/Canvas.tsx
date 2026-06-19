@@ -20,7 +20,7 @@ import ForkEdge from './ForkEdge'
 import ContextEdge from './ContextEdge'
 import DeriveEdge from './DeriveEdge'
 import ContextConnectOverlay from './ContextConnectOverlay'
-import BeeIcon from './BeeIcon'
+import EmptyFolderState from './EmptyFolderState'
 import ActionsLegend from './ActionsLegend'
 import MemoryLegend from './MemoryLegend'
 import ModelSelector from './ModelSelector'
@@ -95,7 +95,6 @@ function CanvasInner(): React.JSX.Element {
   const addDroppedFiles = useCanvasStore((s) => s.addDroppedFiles)
   const setStoreViewport = useCanvasStore((s) => s.setViewport)
   const init = useCanvasStore((s) => s.init)
-  const chooseFolder = useCanvasStore((s) => s.chooseFolder)
   // Split screen (a docked panel beside a live canvas): hide the corner pickers
   // and legends so the narrowed canvas stays uncluttered. They're hidden, not
   // unmounted, so each keeps its own collapse state for when split exits. (Full
@@ -109,11 +108,6 @@ function CanvasInner(): React.JSX.Element {
       if (vp) void setViewport(vp)
     })
   }, [init, setViewport])
-
-  const handleChooseFolder = useCallback(async () => {
-    const vp = await chooseFolder()
-    if (vp) void setViewport(vp)
-  }, [chooseFolder, setViewport])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -521,19 +515,7 @@ function CanvasInner(): React.JSX.Element {
           <FolderChip />
         </div>
 
-        {folder && !folder.current && (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-4">
-            <BeeIcon className="h-16 w-16" />
-            <p className="text-[15px] text-[#92690B]">Pick a folder to start a canvas</p>
-            <button
-              type="button"
-              onClick={() => void handleChooseFolder()}
-              className="cursor-pointer rounded-[14px] border border-[#EDD27E] bg-[#FEF3C7] px-4 py-2 text-[14px] font-medium text-[#92690B] shadow-lg transition-colors hover:bg-[#FDE68A] active:scale-95"
-            >
-              Open folder…
-            </button>
-          </div>
-        )}
+        {folder && !folder.current && <EmptyFolderState />}
 
         <DeleteChatModal />
       </div>

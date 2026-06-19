@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useReactFlow, type Viewport } from '@xyflow/react'
 import { ChevronDown, Folder, FolderPlus } from 'lucide-react'
 import { useCanvasStore } from '../store/canvas'
+import NewFolderCard from './NewFolderCard'
 
 /**
  * Current-folder chip (lives in the top bar) with a dropdown of recent
@@ -16,19 +17,10 @@ export default function FolderChip(): React.JSX.Element | null {
   const folder = useCanvasStore((s) => s.folder)
   const chooseFolder = useCanvasStore((s) => s.chooseFolder)
   const selectFolder = useCanvasStore((s) => s.selectFolder)
-  const createFolder = useCanvasStore((s) => s.createFolder)
   const anyStreaming = useCanvasStore((s) => s.nodes.some((n) => n.data.status === 'streaming'))
   const [open, setOpen] = useState(false)
   const [naming, setNaming] = useState(false)
-  const [name, setName] = useState('')
-  const [parent, setParent] = useState<string | null>(null) // overrides folder.createParent when set
-  const [busy, setBusy] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
   const { setViewport } = useReactFlow()
-
-  useEffect(() => {
-    if (naming) inputRef.current?.focus()
-  }, [naming])
 
   if (!folder) return null // folder state not fetched yet
 
@@ -38,8 +30,6 @@ export default function FolderChip(): React.JSX.Element | null {
   const close = (): void => {
     setOpen(false)
     setNaming(false)
-    setName('')
-    setParent(null)
   }
   const handleChoose = async (): Promise<void> => {
     close()
@@ -48,20 +38,6 @@ export default function FolderChip(): React.JSX.Element | null {
   const handleSelect = async (path: string): Promise<void> => {
     close()
     apply(await selectFolder(path))
-  }
-  const dest = parent ?? folder.createParent
-  const handleCreate = async (): Promise<void> => {
-    if (!name.trim() || busy) return
-    setBusy(true)
-    const vp = await createFolder(name, parent ?? undefined)
-    setBusy(false)
-    close()
-    apply(vp)
-  }
-  const handlePickParent = async (): Promise<void> => {
-    const picked = await window.api.folder.pickCreateParent()
-    if (picked) setParent(picked)
-    inputRef.current?.focus()
   }
 
   const displayName = folder.current
@@ -92,55 +68,13 @@ export default function FolderChip(): React.JSX.Element | null {
             )}
 
             {naming ? (
-              <div className="p-3">
-                <input
-                  ref={inputRef}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void handleCreate()
-                    if (e.key === 'Escape') {
-                      setNaming(false)
-                      setName('')
-                    }
-                  }}
-                  placeholder="Folder name"
-                  className="w-full rounded-[6px] border border-neutral-300 px-2.5 py-1.5 text-[13px] outline-none focus:border-black"
-                />
-                <div className="mt-2 flex items-baseline gap-1 text-[11px] text-neutral-400">
-                  <span className="shrink-0">in</span>
-                  <span className="min-w-0 flex-1 truncate" title={dest}>
-                    {dest}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void handlePickParent()}
-                    className="shrink-0 cursor-pointer font-medium text-neutral-600 hover:text-black"
-                  >
-                    Change…
-                  </button>
-                </div>
-                <div className="mt-3 flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNaming(false)
-                      setName('')
-                    }}
-                    className="cursor-pointer rounded-[6px] px-2.5 py-1 text-[13px] text-neutral-600 hover:bg-neutral-100"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!name.trim() || busy}
-                    onClick={() => void handleCreate()}
-                    className="cursor-pointer rounded-[6px] bg-black px-3 py-1 text-[13px] font-medium text-white transition-colors hover:bg-neutral-800 disabled:cursor-default disabled:opacity-40"
-                  >
-                    Create
-                  </button>
-                </div>
-              </div>
+              <NewFolderCard
+                onDone={(vp) => {
+                  close()
+                  apply(vp)
+                }}
+                onCancel={() => setNaming(false)}
+              />
             ) : (
               <>
                 {folder.recents.map((r) => {

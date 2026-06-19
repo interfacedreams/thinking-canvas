@@ -95,9 +95,13 @@ function SubscriptionBlock({
         </button>
       ) : (
         <input
-          type="password"
+          // A real type=password field puts macOS into Secure Input mode, which
+          // blocks clipboard managers (Maccy etc.) from pasting — so we mask via
+          // CSS on a normal text field instead. Same visual dots, paste works.
+          type="text"
           value={draft}
           autoFocus={editing}
+          autoComplete="off"
           onChange={(e) => {
             setDraft(e.target.value)
             setError(null)
@@ -107,7 +111,7 @@ function SubscriptionBlock({
           }}
           placeholder="sk-ant-oat01-…"
           spellCheck={false}
-          className="mb-2 w-full rounded-[7px] border border-neutral-300 bg-white px-2.5 py-1.5 font-mono text-[12px] outline-none focus:border-black"
+          className="mb-2 w-full rounded-[7px] border border-neutral-300 bg-white px-2.5 py-1.5 font-mono text-[12px] outline-none [-webkit-text-security:disc] focus:border-black"
         />
       )}
       {error && <p className="mb-2 text-[12px] text-red-600">{error}</p>}
@@ -219,9 +223,12 @@ function ApiKeyBlock({
         </button>
       ) : (
         <input
-          type="password"
+          // See SubscriptionBlock: masked text field, not type=password, so
+          // macOS Secure Input doesn't block clipboard-manager pastes.
+          type="text"
           value={draft}
           autoFocus={editing}
+          autoComplete="off"
           onChange={(e) => {
             setDraft(e.target.value)
             setError(null)
@@ -231,7 +238,7 @@ function ApiKeyBlock({
           }}
           placeholder="sk-ant-api03-…"
           spellCheck={false}
-          className="mb-2 w-full rounded-[7px] border border-neutral-300 bg-white px-2.5 py-1.5 font-mono text-[12px] outline-none focus:border-black"
+          className="mb-2 w-full rounded-[7px] border border-neutral-300 bg-white px-2.5 py-1.5 font-mono text-[12px] outline-none [-webkit-text-security:disc] focus:border-black"
         />
       )}
       {error && <p className="mb-2 text-[12px] text-red-600">{error}</p>}

@@ -11,7 +11,7 @@ import {
 import { createHash, randomUUID } from 'crypto'
 import { promises as fs, readFileSync, constants as fsConstants } from 'fs'
 import { tmpdir } from 'os'
-import { basename, extname, isAbsolute, join, relative, resolve } from 'path'
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { ElectronBlocker, adsAndTrackingLists } from '@ghostery/adblocker-electron'
 import {
@@ -924,6 +924,7 @@ async function probeMcpServers(): Promise<McpProbeResult> {
     prompt: idleInput,
     options: {
       cwd: folderRoot ?? app.getPath('userData'),
+      ...claudeExecOpt(),
       model: TITLE_MODEL,
       mcpServers: loaded,
       abortController: ac
@@ -1064,6 +1065,46 @@ const RESEARCH_APPEND =
   'ONE follow-up round of at most 2 researchers. Then write the final report: structured markdown with ' +
   'inline numbered citations [1] and a Sources section listing every URL.'
 
+// The Agent SDK spawns a native CLI binary that ships in a per-platform
+// package (@anthropic-ai/claude-agent-sdk-<platform>-<arch>). Its own resolver
+// does no asar handling: in a packaged app it returns the path *inside*
+// app.asar, which can't be exec'd — the OS walks the path, hits the app.asar
+// file where it expects a directory, and fails with ENOTDIR. We resolve the
+// binary ourselves and redirect to the asarUnpack'd copy so it's a real,
+// spawnable file. Returns undefined if no platform package is installed (dev
+// fallback: let the SDK resolve its default).
+let claudeExecCache: string | null | undefined
+function claudeExecutable(): string | undefined {
+  if (claudeExecCache !== undefined) return claudeExecCache ?? undefined
+  const bin = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  const base = '@anthropic-ai/claude-agent-sdk'
+  // Linux ships both glibc and musl builds — try glibc first, then musl.
+  const candidates =
+    process.platform === 'linux'
+      ? [`${base}-linux-${process.arch}/${bin}`, `${base}-linux-${process.arch}-musl/${bin}`]
+      : [`${base}-${process.platform}-${process.arch}/${bin}`]
+  for (const cand of candidates) {
+    try {
+      let p = require.resolve(cand)
+      if (p.includes(`app.asar${sep}`)) p = p.replace(`app.asar${sep}`, `app.asar.unpacked${sep}`)
+      console.log(`[claude] CLI binary: ${p}`)
+      claudeExecCache = p
+      return p
+    } catch {
+      // not this candidate — try the next
+    }
+  }
+  console.warn(`[claude] no native CLI binary found for ${process.platform}-${process.arch}`)
+  claudeExecCache = null
+  return undefined
+}
+
+/** Spread into every query()'s options so each turn spawns the unpacked binary. */
+function claudeExecOpt(): { pathToClaudeCodeExecutable?: string } {
+  const p = claudeExecutable()
+  return p ? { pathToClaudeCodeExecutable: p } : {}
+}
+
 function registerThreadIpc(): void {
   // Chat titles: a lazy one-shot Haiku turn after a chat's first exchange.
   // Tool-less and session-less — it never touches the chat's own session.
@@ -1078,6 +1119,7 @@ function registerThreadIpc(): void {
           conversation,
         options: {
           cwd: root,
+          ...claudeExecOpt(),
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // text-only turn — no tools, so no permission round-trips
@@ -1116,6 +1158,7 @@ function registerThreadIpc(): void {
           content.slice(0, 6000),
         options: {
           cwd: root,
+          ...claudeExecOpt(),
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // text-only — no tools, no permission round-trips
@@ -1178,6 +1221,7 @@ function registerThreadIpc(): void {
         })(),
         options: {
           cwd: root,
+          ...claudeExecOpt(),
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // vision-only — no tools, no permission round-trips
@@ -1273,6 +1317,20 @@ function registerThreadIpc(): void {
       const root = folderRoot
       if (!root) {
         emit({ nodeId, type: 'done', ok: false, error: 'No folder selected' })
+        return
+      }
+
+      // No credentials → the SDK subprocess would die with a cryptic error
+      // (ENOTDIR and friends) deep in its auth path. Catch it up front and let
+      // the renderer prompt the user to set up a token.
+      if (authStatus().method === 'none') {
+        emit({
+          nodeId,
+          type: 'done',
+          ok: false,
+          needsAuth: true,
+          error: 'Set up a Claude token to start chatting.'
+        })
         return
       }
 
@@ -1568,6 +1626,8 @@ function registerThreadIpc(): void {
           prompt: promptInput,
           options: {
             cwd: root,
+            // Spawn the asarUnpack'd native binary, not the in-asar path (ENOTDIR).
+            ...claudeExecOpt(),
             model: turnModel,
             effort: turnEffort,
             resume: forkFrom?.sessionId ?? sessionId,
@@ -2380,8 +2440,13 @@ app.whenReady().then(async () => {
   registerAuthIpc()
   registerPermissionSettingsIpc()
   registerMcpIpc()
+  registerAdblockIpc()
 
   createWindow()
+
+  // Loads filter lists (cached after first run) and applies blocking to the
+  // browse session — fired non-blocking so it never delays window creation.
+  void initAdblock()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

@@ -2100,6 +2100,26 @@ window.api.thread.onEvent((event) => {
         : {}
     )
   } else if (event.type === 'done') {
+    // No credentials: the turn never ran. Surface it as a toast (like an
+    // unsupported drop) and quietly revert the node — no error strip, no Retry.
+    if (event.needsAuth) {
+      useToastStore.getState().show(event.error ?? 'Set up a Claude token in Settings to start chatting.')
+      patch(event.nodeId, (node) => {
+        if (!isChat(node)) return { status: 'idle', pendingPermission: undefined }
+        const last = node.data.messages[node.data.messages.length - 1]
+        return {
+          status: 'idle',
+          lastError: undefined,
+          pendingPermission: undefined,
+          // drop the empty assistant placeholder this turn would have filled
+          messages:
+            last && last.role === 'assistant' && last.text === ''
+              ? node.data.messages.slice(0, -1)
+              : node.data.messages
+        }
+      })
+      return
+    }
     // Safety sweep: a turn that errored mid-research leaves no childDone — settle any
     // still-pending inline research chips.
     for (const [key, entry] of researchChildren) {

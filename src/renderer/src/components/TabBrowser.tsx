@@ -6,7 +6,7 @@ import { BROWSE_PARTITION } from '../../../shared/types'
 
 // Some sites refuse to render for an unknown "Electron" browser — the guest
 // announces itself as the plain Chrome this Chromium actually is.
-const CLEAN_UA = navigator.userAgent.replace(/\s(?:bee-claude|Electron)\/\S+/g, '')
+const CLEAN_UA = navigator.userAgent.replace(/\s(?:bee[- ]claude|Electron)\/\S+/g, '')
 
 // Where a search goes.
 const SEARCH_URL = 'https://www.google.com/search?q='

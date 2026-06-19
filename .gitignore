@@ -16,3 +16,6 @@ out
 .canvas/
 PLAN.md
 *.tsbuildinfo
+
+# stray bundler output that escapes out/ ignore
+/index.js
