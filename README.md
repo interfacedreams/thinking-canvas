@@ -1,16 +1,29 @@
 # bee-claude
 
-A canvas AI workspace for fast and slow research with claude
+A canvas UI for chatting, taking notes, and reading PDFs/webpages
 
-## Logistics
+![bee-claude](docs/screenshot.png)
 
-- uses Agent SDK credits from your claude subscription (or BYOK claude key)
-- desktop app wrapper around claude code: rooted to your filesystem and uses your MCPs
+## Setup
 
-## Features
+```bash
+npm install --legacy-peer-deps
+npm run dev
+```
 
-- run several chats at once and see them in parallel on a canvas
-- branch messages to go on tangents
-- the two primitives are chat nodes and note nodes (and maybe resource nodes like PDFs/youtube/images in the future)
-- note nodes are markdown files that you can edit
-- key workflow: distill insights from the messy chats, for yourself and for future chat contexts
+The app should open automatically as a Mac app.
+
+Optionally, run `claude setup-token` to authenticate with your Claude subscription, then copy and paste the token into the app's settings (button in the lower left). Otherwise, you'll need an API key.
+
+## About
+
+- A frontend for the Claude Agent SDK
+- Rooted in your filesystem
+- Can specify MCPs
+- See several chats side by side
+- Fork chats
+- Take notes in markdown
+- Read PDFs/webpages in split view or full screen
+- Transform PDFs/webpages into notes
+- Connect any resource node to a chat as context
+- Built-in index memory system
