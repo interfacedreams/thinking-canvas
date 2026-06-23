@@ -1058,6 +1058,16 @@ function researcherDef(): { description: string; prompt: string; tools: string[]
     tools: ['WebSearch', 'WebFetch', ...mcpTools]
   }
 }
+// Always-on framing. The claude_code preset is a coding-agent prompt: left to
+// itself it surveys the working directory ("Let me explore the project
+// directory…") before answering, which is wrong for a thinking canvas. This
+// reframes it: the system prompt already holds the complete context, so don't
+// go spelunking the filesystem, and never leave build artifacts behind.
+const BASE_APPEND =
+  'This is a thinking canvas, not a code repository: you may pull in any relevant ' +
+  "files from the memory index but otherwise don't explore the filesystem unless " +
+  "explicitly asked. Also don't do any building or producing artifacts like HTML."
+
 const RESEARCH_APPEND =
   'Research mode is on for this request. Plan briefly, then spawn 2-3 researcher subagents IN PARALLEL ' +
   '(one message with multiple Agent tool calls, subagent_type: "researcher"), each covering a distinct ' +
@@ -1556,8 +1566,11 @@ function registerThreadIpc(): void {
             'Never edit MEMORY.md itself — the app regenerates it from the pinned resources.' +
             '\n\n' +
             memoryIndex.trim()
-          : ''
+          : notePath
+            ? ''
+            : 'PROJECT MEMORY — empty. You have no pinned context; answer directly.'
         const systemAppend = [
+          BASE_APPEND,
           contextAppend,
           writableAppend,
           filesAppend,
@@ -2402,6 +2415,11 @@ app.whenReady().then(async () => {
       if (!/^https?:\/\//i.test(params.src ?? '')) event.preventDefault()
     })
     if (contents.getType() === 'webview') {
+      // Trackpad pinch-to-zoom is off by default on a guest (Chromium clamps
+      // visual-zoom limits to 1,1). Open them so a pinch zooms the page; no
+      // renderer-side wheel handling can substitute for this — the limit lives
+      // on the guest's own webContents.
+      contents.setVisualZoomLevelLimits(1, 3).catch(() => {})
       // A tab node is one tab on purpose: anything its page tries to pop open
       // (target=_blank, window.open, ⌘-click) navigates that tab's own guest
       // instead of spawning a window — so ⌘-click behaves exactly like a plain

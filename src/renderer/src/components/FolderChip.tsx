@@ -77,35 +77,40 @@ export default function FolderChip(): React.JSX.Element | null {
               />
             ) : (
               <>
-                {folder.recents.map((r) => {
-                  const isCurrent = r.path === folder.current
-                  return (
-                    <button
-                      key={r.path}
-                      type="button"
-                      disabled={anyStreaming || isCurrent}
-                      onClick={() => void handleSelect(r.path)}
-                      className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
-                        isCurrent ? '' : 'cursor-pointer hover:bg-neutral-100'
-                      } ${anyStreaming && !isCurrent ? 'opacity-50' : ''}`}
-                    >
-                      <span
-                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                          isCurrent ? 'bg-black' : 'bg-transparent'
-                        }`}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium text-neutral-800">
-                          {r.name}
+                {/* Recents scroll; the create / open actions below stay pinned. */}
+                <div className="max-h-[50vh] overflow-y-auto">
+                  {folder.recents.map((r) => {
+                    const isCurrent = r.path === folder.current
+                    return (
+                      <button
+                        key={r.path}
+                        type="button"
+                        disabled={anyStreaming || isCurrent}
+                        onClick={() => void handleSelect(r.path)}
+                        className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
+                          isCurrent ? '' : 'cursor-pointer hover:bg-neutral-100'
+                        } ${anyStreaming && !isCurrent ? 'opacity-50' : ''}`}
+                      >
+                        <span
+                          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                            isCurrent ? 'bg-black' : 'bg-transparent'
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium text-neutral-800">
+                            {r.name}
+                          </span>
+                          <span className="block truncate text-[11px] text-neutral-400">
+                            {r.path}
+                          </span>
                         </span>
-                        <span className="block truncate text-[11px] text-neutral-400">{r.path}</span>
-                      </span>
-                      <span className="shrink-0 text-[11px] text-neutral-400">
-                        {r.chatCount} chat{r.chatCount === 1 ? '' : 's'}
-                      </span>
-                    </button>
-                  )
-                })}
+                        <span className="shrink-0 text-[11px] text-neutral-400">
+                          {r.chatCount} chat{r.chatCount === 1 ? '' : 's'}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
                 <button
                   type="button"
                   disabled={anyStreaming}

@@ -379,9 +379,11 @@ export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string>
 }
 
 /**
- * Forks land to the right of their parent, stacking downward when occupied.
- * Forks sharing an anchor message queue up: each new one starts just beneath
- * the bottom-most existing sibling.
+ * Forks land to the right of their parent and just beneath its top, giving a
+ * cascading down-and-right offset. Forks sharing an anchor message queue up:
+ * each new one starts just beneath the bottom-most existing sibling. If the
+ * spot overlaps a chat further down, the fork slides down to sit just below
+ * whatever's in the way (one GAP of padding), repeating until clear.
  */
 function findForkSpot(
   nodes: CanvasNode[],
@@ -390,16 +392,20 @@ function findForkSpot(
 ): { x: number; y: number } {
   const boxes = nodes.map(boxOf)
   const p = boxOf(parent)
-  const spot = { x: p.x + p.w + GAP, y: p.y }
+  // To the right of the parent, top dropped one GAP below the parent's top.
+  const x = p.x + p.w + GAP
+  let y = p.y + GAP
   if (siblings.length > 0) {
     const lowest = siblings.map(boxOf).reduce((a, b) => (b.y + b.h > a.y + a.h ? b : a))
-    spot.x = lowest.x
-    spot.y = lowest.y + lowest.h + GAP
+    y = lowest.y + lowest.h + GAP
   }
-  while (boxes.some((b) => tooClose({ ...spot, w: NODE_W, h: EST_NODE_H }, b))) {
-    spot.y += EST_NODE_H + GAP
+  // Slide down past anything in the way, settling just below it with padding.
+  for (;;) {
+    const hit = boxes.find((b) => tooClose({ x, y, w: NODE_W, h: EST_NODE_H }, b))
+    if (!hit) break
+    y = hit.y + hit.h + GAP
   }
-  return spot
+  return { x, y }
 }
 
 interface CanvasState {
@@ -819,15 +825,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     })()
   }
 
-  // A fresh node takes over both kinds of focus: it becomes the selected node
-  // (everything else deselects) and focusDraft moves the keyboard into it.
+  // A fresh node takes over keyboard focus (focusDraft) and clears everyone
+  // else's selection. Whether it grabs the React Flow *selection* depends on the
+  // view: on the bare canvas it stays unselected, because a selected newborn
+  // sitting next to an already-selected node makes React Flow drag the pair as a
+  // unit (the note-moves-the-chat bug — same reason deriveNote spawns unselected).
+  // With a sheet open we keep the old behavior: the new node becomes the
+  // selection so it's the panel's focus.
   const adopt = <T extends CanvasNode>(node: T): T => {
-    const selected = { ...node, selected: true }
+    const selected = get().expanded !== null
+    const placed = { ...node, selected }
     set((s) => ({
-      nodes: [...s.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), selected]
+      nodes: [...s.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), placed]
     }))
     persist()
-    return selected
+    return placed
   }
 
   // Cycle the post-it palette: each fresh node takes the color after the

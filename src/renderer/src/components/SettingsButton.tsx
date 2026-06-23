@@ -85,7 +85,7 @@ export default function SettingsButton(): React.JSX.Element {
 
       {open && (
         <TabbedModal
-          title="Settings"
+          title="Global Settings"
           titleIcon={Settings}
           tabs={TABS}
           active={tab}
