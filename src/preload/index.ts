@@ -84,7 +84,9 @@ const api = {
     // PDF bytes for the inline viewer; Buffers arrive here as Uint8Array.
     pdfData: (rel: string): Promise<Uint8Array | null> => ipcRenderer.invoke('file:pdfData', rel),
     // A 1-3 sentence index blurb for a pinned image/PDF (vision Haiku one-shot).
-    describe: (rel: string): Promise<string | null> => ipcRenderer.invoke('file:describe', rel)
+    describe: (rel: string): Promise<string | null> => ipcRenderer.invoke('file:describe', rel),
+    // Remove a media card's backing file from the folder (card + file deleted together).
+    delete: (rel: string): Promise<void> => ipcRenderer.invoke('file:delete', rel)
   },
   link: {
     // Save a pinned page's Defuddle markdown as a hidden clip the agent can Read.

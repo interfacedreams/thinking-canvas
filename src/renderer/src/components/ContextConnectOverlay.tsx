@@ -10,6 +10,19 @@ import {
   type CanvasNode
 } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
+import { useSpawn } from '../lib/useSpawn'
+
+// While connecting, these bare keys drop a new node where the arrow is aiming.
+const SPAWN_KEYS: Record<string, 'chat' | 'note' | 'file' | 'link' | 'label'> = {
+  c: 'chat',
+  n: 'note',
+  f: 'file',
+  t: 'link',
+  l: 'label'
+}
+// New nodes drop with their top-left offset from the cursor so the cursor lands
+// near the card's top — mirrors PlacementOverlay's ANCHOR_Y.
+const DROP_ANCHOR_Y = 24
 
 // Click-to-connect: once a source's right circle is tapped (ctxConnectSource
 // in the store), this overlay draws a faded arrow from that circle to the
@@ -22,6 +35,13 @@ import { paletteFor } from '../lib/palette'
 // Sources: a resource feeds a chat; a chat feeds a note.
 const isCtxSource = (n: CanvasNode): boolean =>
   isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research')
+
+// A chat source can also fork onto empty canvas — but only once it has a tip
+// (a completed assistant reply) to branch from. A mid-stream chat still
+// qualifies: it forks from its last settled reply (the in-flight one has no
+// uuid yet), so you can branch without waiting for the response to finish.
+const chatForkable = (n: CanvasNode): boolean =>
+  isChat(n) && n.data.messages.some((m) => m.role === 'assistant' && m.uuid)
 
 // Given the armed source, is `n` a valid drop target? A chat source feeds
 // notes; any other source feeds chats.
@@ -68,12 +88,22 @@ function hits(n: CanvasNode, p: { x: number; y: number }, radius: number): boole
 }
 
 function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | null {
-  const { screenToFlowPosition, getZoom } = useReactFlow()
+  const { screenToFlowPosition, getZoom, setCenter } = useReactFlow()
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
   const addOutputEdge = useCanvasStore((s) => s.addOutputEdge)
+  const addNodeAt = useCanvasStore((s) => s.addNodeAt)
+  const addNoteAt = useCanvasStore((s) => s.addNoteAt)
+  const forkChat = useCanvasStore((s) => s.forkChat)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const spawn = useSpawn()
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === sourceId))
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null)
+  // Latest cursor in flow coords, for the key handler (whose effect closure
+  // would otherwise capture a stale `cursor`).
+  const cursorRef = useRef<{ x: number; y: number } | null>(null)
+  // Screen-space cursor too, for the fixed hint pill (flow coords would shrink
+  // with zoom; the hint should stay legible at any scale).
+  const [screenCursor, setScreenCursor] = useState<{ x: number; y: number } | null>(null)
   const [snapId, setSnapId] = useState<string | null>(null)
   const snapRef = useRef<string | null>(null)
   const targetNode = useCanvasStore((s) =>
@@ -91,6 +121,8 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
     const onMove = (e: PointerEvent): void => {
       const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
       setCursor(p)
+      cursorRef.current = p
+      setScreenCursor({ x: e.clientX, y: e.clientY })
       const radius = SNAP_RADIUS / getZoom()
       const nodes = useCanvasStore.getState().nodes
       const source = nodes.find((n) => n.id === sourceId)
@@ -117,18 +149,68 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
   // lands here: these listeners attach a tick after it finished propagating
   // (and the circles stopPropagation besides).
   useEffect(() => {
-    const onClick = (): void => {
+    const onClick = (e: MouseEvent): void => {
+      const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
       if (snapRef.current) {
-        // Read the source fresh so a chat source commits an output edge and a
+        // Snapped onto a target: a chat source commits an output edge, a
         // resource source commits a context edge.
-        const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
         if (src && isChat(src)) addOutputEdge(sourceId, snapRef.current)
         else addContextEdge(sourceId, snapRef.current)
+      } else if (
+        src &&
+        isChat(src) &&
+        (e.target as HTMLElement)?.classList?.contains('react-flow__pane')
+      ) {
+        // No target, and the click landed on empty canvas: fork the chat at the
+        // drop point. forkChat no-ops if the chat has no tip yet, so an un-run
+        // chat just disarms. Clicks on other UI (buttons, nodes) only cancel.
+        const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+        const forkId = forkChat(sourceId, { x: p.x, y: p.y })
+        // Glide to center on the newborn fork — same easing as placing a chat
+        // with C (come in to 100% when zoomed out, never zoom out from closer).
+        if (forkId)
+          void setCenter(p.x + NODE_W / 2, p.y + 150, {
+            zoom: Math.max(getZoom(), 1),
+            duration: 250
+          })
       }
       setCtxConnectSource(null)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setCtxConnectSource(null)
+      if (e.key === 'Escape') {
+        setCtxConnectSource(null)
+        return
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return
+      const tgt = e.target as HTMLElement
+      if (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable) return
+      const kind = SPAWN_KEYS[e.key.toLowerCase()]
+      if (!kind) return
+      e.preventDefault()
+      const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
+      const p = cursorRef.current
+      // Drop the new node wired to the source when the pair is a valid edge and
+      // needs no picker: a chat forks a chat or drives a note; a resource feeds
+      // a chat as context. Anything else (file/link/label, or no cursor yet)
+      // can't be wired here — fall back to the normal armed-placement spawn.
+      if (src && p) {
+        const pos = { x: p.x - NODE_W / 2, y: p.y - DROP_ANCHOR_Y }
+        if (isChat(src) && kind === 'chat') {
+          // forkChat no-ops without a tip; a plain chat still drops, just unwired
+          if (!forkChat(sourceId, pos)) addNodeAt(pos)
+          return setCtxConnectSource(null)
+        }
+        if (isChat(src) && kind === 'note') {
+          addOutputEdge(sourceId, addNoteAt(pos).id)
+          return setCtxConnectSource(null)
+        }
+        if (!isChat(src) && kind === 'chat') {
+          addContextEdge(sourceId, addNodeAt(pos).id)
+          return setCtxConnectSource(null)
+        }
+      }
+      setCtxConnectSource(null)
+      spawn(kind)
     }
     window.addEventListener('click', onClick)
     window.addEventListener('keydown', onKey)
@@ -136,7 +218,19 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       window.removeEventListener('click', onClick)
       window.removeEventListener('keydown', onKey)
     }
-  }, [addContextEdge, addOutputEdge, setCtxConnectSource, sourceId])
+  }, [
+    addContextEdge,
+    addOutputEdge,
+    addNodeAt,
+    addNoteAt,
+    forkChat,
+    spawn,
+    screenToFlowPosition,
+    setCenter,
+    getZoom,
+    setCtxConnectSource,
+    sourceId
+  ])
 
   if (!sourceNode || !isCtxSource(sourceNode)) return null
   const snapped = snapId && targetNode ? targetNode : null
@@ -145,6 +239,18 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
 
   const accent = paletteFor(sourceNode.data.color).accent
   const s = sourceCircleRight(sourceNode)
+  // A forkable chat, not yet aimed at a note, can drop a fork on empty canvas —
+  // ping rings on its knob advertise that the next canvas click does something.
+  const canFork = isChat(sourceNode) && chatForkable(sourceNode)
+  const showPing = canFork && !snapped
+  // The cursor pill spells out what a click will do at this moment.
+  const hint = snapped
+    ? 'Click to connect'
+    : isChat(sourceNode)
+      ? canFork
+        ? 'Click empty space to fork · a note to connect · C / N to drop one'
+        : 'Click a note to connect · C / N to drop one'
+      : 'Click a chat to connect · C to drop one'
   const [path] = getBezierPath({
     sourceX: s.x,
     sourceY: s.y,
@@ -155,53 +261,74 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
   })
 
   return (
-    <ViewportPortal>
-      <svg
-        width="1"
-        height="1"
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          overflow: 'visible',
-          pointerEvents: 'none'
-        }}
-        className={snapped ? 'ctx-pending ctx-snapped' : 'ctx-pending'}
-      >
-        <defs>
-          <marker
-            id="ctx-pending-arrow"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="6"
-            markerHeight="6"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill={accent} />
-          </marker>
-        </defs>
-        <path
-          d={path}
-          fill="none"
-          stroke={accent}
-          strokeWidth={3}
-          markerEnd="url(#ctx-pending-arrow)"
-          className="ctx-pending-line"
-        />
-        {snapped && (
-          <circle
-            cx={chatCircleCenter(snapped).x}
-            cy={chatCircleCenter(snapped).y}
-            r={CIRCLE_R + 4}
+    <>
+      {screenCursor && (
+        <div
+          className="pointer-events-none fixed z-[1000] -translate-y-1/2 translate-x-4 rounded-full bg-neutral-900/90 px-2.5 py-1 text-[12px] font-medium whitespace-nowrap text-white shadow-sm"
+          style={{ left: screenCursor.x, top: screenCursor.y }}
+        >
+          {hint}
+        </div>
+      )}
+      <ViewportPortal>
+        <svg
+          width="1"
+          height="1"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            overflow: 'visible',
+            pointerEvents: 'none'
+          }}
+          className={snapped ? 'ctx-pending ctx-snapped' : 'ctx-pending'}
+        >
+          <defs>
+            <marker
+              id="ctx-pending-arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={accent} />
+            </marker>
+          </defs>
+          <path
+            d={path}
             fill="none"
             stroke={accent}
-            strokeWidth={2.5}
-            className="ctx-pending-ring"
+            strokeWidth={3}
+            markerEnd="url(#ctx-pending-arrow)"
+            className="ctx-pending-line"
           />
-        )}
-      </svg>
-    </ViewportPortal>
+          {snapped && (
+            <circle
+              cx={chatCircleCenter(snapped).x}
+              cy={chatCircleCenter(snapped).y}
+              r={CIRCLE_R + 4}
+              fill="none"
+              stroke={accent}
+              strokeWidth={2.5}
+              className="ctx-pending-ring"
+            />
+          )}
+          {showPing && (
+            <circle
+              cx={s.x}
+              cy={s.y}
+              r={CIRCLE_R}
+              fill="none"
+              stroke={accent}
+              strokeWidth={2.5}
+              className="ctx-fork-ping"
+            />
+          )}
+        </svg>
+      </ViewportPortal>
+    </>
   )
 }
 

@@ -15,6 +15,11 @@ const GESTURE_GAP_MS = 200
 const regions = new Set<HTMLElement>()
 let lastWheelTs = 0
 let gestureOwner: HTMLElement | 'pane' = 'pane'
+// Axis lock for the current gesture. Once a region has scrolled its content
+// vertically, the gesture is committed to the vertical axis: the sideways
+// drift trackpads emit mid-scroll must not leak out as a canvas pan. Set by
+// the owning region, reset when a new gesture begins.
+let gestureAxis: 'vertical' | null = null
 
 const trackGesture = (e: WheelEvent): void => {
   // Clones re-dispatched onto the pane by forwardToPane are untrusted — they
@@ -24,6 +29,7 @@ const trackGesture = (e: WheelEvent): void => {
   if (now - lastWheelTs > GESTURE_GAP_MS) {
     const target = e.target instanceof Node ? e.target : null
     gestureOwner = (target && [...regions].find((r) => r.contains(target))) || 'pane'
+    gestureAxis = null
   }
   lastWheelTs = now
 }
@@ -138,9 +144,14 @@ export function useForwardedWheel(
       }
       if (e.deltaY < 0) onScrollUpRef.current?.()
       // Mostly-horizontal: scroll an overflowing code block if one is under
-      // the cursor; otherwise the focused region just absorbs it.
+      // the cursor; otherwise nothing here scrolls sideways. Once this gesture
+      // has committed to vertical scrolling, swallow the sideways drift so it
+      // never leaks out as a canvas pan; only an axis-undecided gesture is free
+      // to pan.
       if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) {
-        if (!childCanScrollX(e)) consume(e)
+        if (childCanScrollX(e)) return
+        if (gestureAxis === 'vertical') consume(e)
+        else forwardToPane(e)
         return
       }
       const canScroll = el.scrollHeight - el.clientHeight > 1
@@ -149,6 +160,9 @@ export function useForwardedWheel(
         forwardToPane(e)
         return
       }
+      // We're about to scroll the content vertically — commit the gesture to
+      // the vertical axis so later sideways drift stays trapped here.
+      gestureAxis = 'vertical'
       const atEdge =
         e.deltaY < 0 ? el.scrollTop <= 0 : el.scrollHeight - el.scrollTop - el.clientHeight <= 1
       if (atEdge) consume(e)

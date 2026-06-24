@@ -8,8 +8,13 @@ import { useCallback, useState } from 'react'
  * than canvas.json. Each legend passes its own stable key.
  */
 export function usePersistedCollapse(key: string): [boolean, (collapsed: boolean) => void] {
-  const storageKey = `bee-claude:legend-collapsed:${key}`
-  const [collapsed, set] = useState(() => localStorage.getItem(storageKey) === '1')
+  const storageKey = `thinking-canvas:legend-collapsed:${key}`
+  // Fall back to the pre-rename key so collapse state survives the app rename.
+  const [collapsed, set] = useState(
+    () =>
+      (localStorage.getItem(storageKey) ?? localStorage.getItem(`bee-claude:legend-collapsed:${key}`)) ===
+      '1'
+  )
 
   const setCollapsed = useCallback(
     (next: boolean) => {

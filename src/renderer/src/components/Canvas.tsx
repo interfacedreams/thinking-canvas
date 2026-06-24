@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -33,7 +33,7 @@ import DeleteChatModal from './DeleteChatModal'
 import ExpandedPanel from './ExpandedPanel'
 import Toast from './Toast'
 import { useToastStore } from '../store/toast'
-import { useCanvasStore, NODE_W, isChat, isNote, isFile, isLink } from '../store/canvas'
+import { useCanvasStore, NODE_W, isChat, isNote, isFile, isLink, isLabel } from '../store/canvas'
 import type { ChosenFile } from '../../../shared/types'
 import { CTX_HANDLE_ID, OUTPUT_HANDLE_ID, INPUT_HANDLE_ID } from '../lib/nodeChrome'
 import { paletteFor } from '../lib/palette'
@@ -84,6 +84,14 @@ function pastedUrl(text: string): string | null {
 function CanvasInner(): React.JSX.Element {
   const nodes = useCanvasStore((s) => s.nodes)
   const storeEdges = useCanvasStore((s) => s.edges)
+  // Labels always float above every other resource. React Flow stacks by
+  // node.zIndex (and adds 1000 to a selected node via elevateNodesOnSelect),
+  // so labels get a base well above that ceiling while everything else keeps
+  // its natural ordering.
+  const layeredNodes = useMemo(
+    () => nodes.map((n) => (isLabel(n) ? { ...n, zIndex: 10000 } : n)),
+    [nodes]
+  )
   const loaded = useCanvasStore((s) => s.loaded)
   const folder = useCanvasStore((s) => s.folder)
   const onNodesChange = useCanvasStore((s) => s.onNodesChange)
@@ -135,6 +143,9 @@ function CanvasInner(): React.JSX.Element {
       if (e.altKey || e.repeat) return
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      // While a click-to-connect is armed, the connect overlay owns C / N / F / T / L
+      // — it drops the new node already wired to the source.
+      if (useCanvasStore.getState().ctxConnectSource) return
       const key = e.key.toLowerCase()
       if (key === 'c' || key === 'n' || key === 'f' || key === 't' || key === 'l') {
         e.preventDefault()
@@ -256,9 +267,15 @@ function CanvasInner(): React.JSX.Element {
   const lastMouse = useRef<{ x: number; y: number } | null>(null)
   useEffect(() => {
     const onPaste = (e: ClipboardEvent): void => {
-      // composers, titles, and notes keep their normal paste
-      const t = e.target as HTMLElement
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      // composers, titles, and notes keep their normal paste. The paste's
+      // target can be a text node or a nested non-editable child (e.g. inside
+      // TipTap), so check the focused element and walk up from the target
+      // rather than trusting target's own tag/contentEditable.
+      const isEditable = (n: EventTarget | null): boolean => {
+        const el = n instanceof Element ? n : n instanceof Node ? n.parentElement : null
+        return !!el?.closest('input, textarea, [contenteditable="true"]')
+      }
+      if (isEditable(document.activeElement) || isEditable(e.target)) return
       if (!useCanvasStore.getState().folder?.current) return
       const dt = e.clipboardData
       if (!dt) return
@@ -375,7 +392,7 @@ function CanvasInner(): React.JSX.Element {
       >
         {loaded && (
           <ReactFlow
-            nodes={nodes}
+            nodes={layeredNodes}
             edges={storeEdges.map((e) => {
               const accent = paletteFor(nodes.find((n) => n.id === e.source)?.data.color).accent
               if (e.kind === 'context') {

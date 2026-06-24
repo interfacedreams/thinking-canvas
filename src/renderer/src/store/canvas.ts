@@ -42,8 +42,10 @@ export const DERIVE_GAP = 88
  * unreadably small whenever the whole node is in view.
  */
 export function viewportFitHeight(zoom: number): number {
+  // Scale the auto-grow ceiling to the actual window height — no fixed cap, so
+  // a tall monitor lets chat/note nodes grow taller before they start to scroll.
   const h = (window.innerHeight * 0.85) / Math.max(zoom, 1)
-  return Math.round(Math.min(MAX_NODE_H, Math.max(MIN_GROW_H, h)))
+  return Math.round(Math.max(MIN_GROW_H, h))
 }
 // Placement estimate for a node whose content hasn't been measured yet.
 const EST_NODE_H = 360
@@ -521,7 +523,9 @@ interface CanvasState {
   sendNote: (id: string) => Promise<void>
   toggleResearch: (id: string) => void
   respondPermission: (id: string, requestId: string, allow: boolean) => void
-  forkChat: (nodeId: string) => string | null
+  // Fork the chat at its tip. With `at`, the new node's top-left lands there
+  // (click-to-place from the output knob); without it, findForkSpot picks a slot.
+  forkChat: (nodeId: string, at?: { x: number; y: number }) => string | null
   // Derive a fresh note from any node + an instruction: spawn a note to the
   // right wired back by a 'derive' edge, then run an editing turn grounded in
   // the source (a chat forks its session; a note/file/link rides as context).
@@ -547,18 +551,25 @@ interface CanvasState {
   persistThread: (id: string) => void
 }
 
+// Reads the current key, falling back to the pre-rename `bee-claude:*` key so
+// a saved preference survives the app rename. (The migrated userData dir brings
+// the old localStorage entries along; this picks them up the first time.)
+function loadPref(key: string, legacyKey: string): string | null {
+  return localStorage.getItem(key) ?? localStorage.getItem(legacyKey)
+}
+
 // Model choice is an app-wide preference, not part of any one canvas —
 // it lives in localStorage rather than canvas.json.
-const MODEL_STORAGE_KEY = 'bee-claude:model'
+const MODEL_STORAGE_KEY = 'thinking-canvas:model'
 function loadModel(): ModelId {
-  const saved = localStorage.getItem(MODEL_STORAGE_KEY)
+  const saved = loadPref(MODEL_STORAGE_KEY, 'bee-claude:model')
   return MODEL_OPTIONS.some((m) => m.id === saved) ? (saved as ModelId) : DEFAULT_MODEL
 }
 
 // Thinking effort is an app-wide preference too — same localStorage home.
-const EFFORT_STORAGE_KEY = 'bee-claude:effort'
+const EFFORT_STORAGE_KEY = 'thinking-canvas:effort'
 function loadEffort(): EffortId {
-  const saved = localStorage.getItem(EFFORT_STORAGE_KEY)
+  const saved = loadPref(EFFORT_STORAGE_KEY, 'bee-claude:effort')
   return EFFORT_OPTIONS.some((e) => e.id === saved) ? (saved as EffortId) : DEFAULT_EFFORT
 }
 
@@ -1062,10 +1073,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         else if (node && isLink(node))
           void window.api.link.unclip(nodeId) // drop its clip, if any
         else if (node && isFile(node)) {
-          // nothing on disk to clean up — the node is just a pin
+          // Delete the backing file too, so the top-level scan can't re-surface
+          // the card on the next load. (Auto-placed cards derive their id from
+          // the filename, so a card that's gone but a file that isn't comes back.)
+          if (node.data.file) void window.api.file.delete(node.data.file)
         } else void window.api.canvas.deleteThread(nodeId)
       }
-      persist()
+      // Write the layout immediately rather than through the 500ms debounce, so
+      // a quick close/reopen after a delete can't drop the save.
+      clearTimeout(saveTimer)
+      saveTimer = undefined
+      if (get().loaded) void window.api.canvas.save(buildDoc())
     },
 
     setAnchorOffsets: (nodeId, offsets) => {
@@ -1419,12 +1437,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       window.api.thread.respondPermission({ requestId, allow })
     },
 
-    forkChat: (nodeId) => {
+    forkChat: (nodeId, at) => {
       const parent = get().nodes.find((n) => n.id === nodeId)
-      if (!parent || !isChat(parent) || parent.data.status === 'streaming') return null
+      if (!parent || !isChat(parent)) return null
       // Fork-ahead only: the anchor is always the chat's tip — its latest
-      // assistant reply. Forking again later anchors on the new tip, and
-      // several forks of the same tip simply share an anchor message.
+      // *settled* assistant reply. Mid-stream the in-flight reply has no uuid
+      // yet, so forking while the parent streams branches from the prior turn
+      // (already persisted, so the fork is safe). Forking again later anchors on
+      // the new tip, and several forks of the same tip share an anchor message.
       const anchor = [...parent.data.messages]
         .reverse()
         .find((m) => m.role === 'assistant' && m.uuid)
@@ -1441,7 +1461,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
 
       // The forked session carries the parent's context up to the anchor —
       // the node's transcript starts clean and shows only what diverges.
-      const node = makeNode(findForkSpot(get().nodes, parent, siblings), {
+      const node = makeNode(at ?? findForkSpot(get().nodes, parent, siblings), {
         // Start untitled like a fresh chat; the title is generated from the
         // fork's own first turn rather than inherited from the parent.
         color: parent.data.color, // forks stay in the parent's color family
@@ -1854,29 +1874,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
             const savedHeight =
               p.minimized && p.height != null ? Math.min(p.height, cap) : undefined
             if (p.kind === 'file') {
+              const isPdf = p.file?.toLowerCase().endsWith('.pdf')
               // File frames are explicit and aspect-true — no screen-fit clamp.
+              // Auto-placed cards arrive with no height; a PDF with no height
+              // renders every page full-inline, so fall back to the standard
+              // PDF frame (width and height) when none was saved.
+              const fileFrameDims =
+                p.height != null && !p.minimized
+                  ? { width: p.width, height: p.height }
+                  : isPdf
+                    ? { width: PDF_FRAME.width, height: PDF_FRAME.height }
+                    : { width: p.width }
               return {
-                ...makeFileNode(
-                  p.position,
-                  {
-                    width: p.width,
-                    ...(p.height != null && !p.minimized ? { height: p.height } : {})
-                  },
-                  {
-                    title: p.title,
-                    color: p.color,
-                    kind: p.file?.toLowerCase().endsWith('.pdf')
-                      ? ('pdf' as const)
-                      : ('image' as const),
-                    file: p.file,
-                    dataUrl: p.dataUrl,
-                    ...(p.pinned ? { pinned: true } : {}),
-                    ...(p.description ? { description: p.description } : {}),
-                    minimized: p.minimized ?? false,
-                    updatedAt: p.updatedAt,
-                    ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
-                  }
-                ),
+                ...makeFileNode(p.position, fileFrameDims, {
+                  title: p.title,
+                  color: p.color,
+                  kind: isPdf ? ('pdf' as const) : ('image' as const),
+                  file: p.file,
+                  dataUrl: p.dataUrl,
+                  ...(p.pinned ? { pinned: true } : {}),
+                  ...(p.description ? { description: p.description } : {}),
+                  minimized: p.minimized ?? false,
+                  updatedAt: p.updatedAt,
+                  ...(p.minimized && p.height != null ? { savedHeight: p.height } : {})
+                }),
                 id: p.id
               }
             }
@@ -2115,7 +2136,9 @@ window.api.thread.onEvent((event) => {
     // No credentials: the turn never ran. Surface it as a toast (like an
     // unsupported drop) and quietly revert the node — no error strip, no Retry.
     if (event.needsAuth) {
-      useToastStore.getState().show(event.error ?? 'Set up a Claude token in Settings to start chatting.')
+      useToastStore
+        .getState()
+        .show(event.error ?? 'Set up a Claude token in Settings to start chatting.')
       patch(event.nodeId, (node) => {
         if (!isChat(node)) return { status: 'idle', pendingPermission: undefined }
         const last = node.data.messages[node.data.messages.length - 1]

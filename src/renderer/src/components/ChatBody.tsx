@@ -6,11 +6,10 @@ import remarkBreaks from 'remark-breaks'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { RotateCcw, Telescope, TriangleAlert, Search, CheckCircle2 } from 'lucide-react'
+import { RotateCcw, Telescope, TriangleAlert, Search, CheckCircle2, ArrowUp } from 'lucide-react'
 import { useCanvasStore, isChat, type Message } from '../store/canvas'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
 import { MarkdownSourceContext, markdownComponents } from '../lib/markdownLink'
-import CanvasMark from './CanvasMark'
 import PermissionPrompt from './PermissionPrompt'
 
 function MessageView({
@@ -253,9 +252,9 @@ const ChatBody = forwardRef<
               onClick={() => send(id)}
               disabled={!canSend}
               title={streaming ? 'Waiting for the assistant to finish' : 'Send (Enter)'}
-              className="transition-all hover:scale-110 active:scale-95 disabled:opacity-30"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-(--np-accent) text-white transition-all hover:scale-110 active:scale-95 disabled:opacity-30"
             >
-              <CanvasMark className="h-7 w-7" />
+              <ArrowUp className="h-4 w-4" />
             </button>
           </div>
         </div>

@@ -1101,7 +1101,9 @@ function researcherDef(): { description: string; prompt: string; tools: string[]
 const BASE_APPEND =
   'This is a thinking canvas, not a code repository: you may pull in any relevant ' +
   "files from the memory index but otherwise don't explore the filesystem unless " +
-  "explicitly asked. Also don't do any building or producing artifacts like HTML."
+  "explicitly asked. Also don't do any building or producing artifacts like HTML. " +
+  'Do not do deep research except if explicitly asked via the term "research" or ' +
+  'some mention of effort like "search thoroughly".'
 
 const RESEARCH_APPEND =
   'Research mode is on for this request. Plan briefly, then spawn 2-3 researcher subagents IN PARALLEL ' +
@@ -2053,6 +2055,19 @@ function registerNoteIpc(): void {
       } catch {
         // never existed
       }
+    }
+  })
+
+  // Delete a file card's backing file from the folder. Used when a media card is
+  // removed from the canvas — the card and the file go together (mirrors how a
+  // note delete unlinks its .md). Path-guarded so it can only touch the folder.
+  ipcMain.handle('file:delete', async (_event, rel: string): Promise<void> => {
+    const root = folderRoot
+    if (!root || typeof rel !== 'string' || !isSafeFileRel(rel)) return
+    try {
+      await fs.unlink(join(root, rel))
+    } catch {
+      // already gone or never on disk (e.g. a preview-only paste)
     }
   })
 

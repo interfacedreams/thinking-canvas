@@ -4,11 +4,10 @@ import {
   NodeResizeControl,
   Position,
   ResizeControlVariant,
-  useReactFlow,
   useStoreApi,
   type NodeProps
 } from '@xyflow/react'
-import { GitFork, Minus, Trash2, TriangleAlert } from 'lucide-react'
+import { Minus, Trash2, TriangleAlert } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type ChatNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -31,7 +30,6 @@ import TitleEditSlot from './TitleEditSlot'
 
 function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): React.JSX.Element {
   const setTitle = useCanvasStore((s) => s.setTitle)
-  const forkChat = useCanvasStore((s) => s.forkChat)
   const requestDelete = useCanvasStore((s) => s.requestDelete)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
@@ -43,7 +41,6 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   // `height` prop reports the *measured* height, which would pin the node at
   // whatever size it currently is and stop it from growing with new content.
   const explicitHeight = useCanvasStore((s) => s.nodes.find((n) => n.id === id)?.height)
-  const { fitView } = useReactFlow()
   const { docked, mode, open, collapse } = usePanel(id)
 
   // Hold the chat's height while it's docked so its card box stays put when the
@@ -80,9 +77,6 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   // Researcher transcripts spawned by a research turn — display-only: they ran
   // inside the lead's session, so there's nothing to reply to (and no composer).
   const isResearch = data.kind === 'research'
-  // Fork-ahead: forkable once the chat has a tip (a completed assistant reply).
-  // Forks qualify too once their first turn lands — sessions chain freely.
-  const canFork = !streaming && data.messages.some((m) => m.role === 'assistant' && m.uuid)
 
   const palette = paletteFor(data.color)
 
@@ -120,15 +114,6 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   // docked, its messages aren't on the canvas — anchors degrade to the node
   // edge, which is where the stub sits anyway.)
   useEffect(measureAnchors)
-
-  const forkAndCenter = (): void => {
-    const forkId = forkChat(id)
-    if (!forkId) return
-    // let React Flow mount and measure the new node before fitting to it
-    setTimeout(() => {
-      void fitView({ nodes: [{ id: forkId }], duration: 300, padding: 0.1, maxZoom: 1 })
-    }, 50)
-  }
 
   return (
     <div
@@ -181,11 +166,11 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
           style={ctxHandleStyle(palette.accent)}
         />
       )}
-      {/* the output connector: drag this circle onto a note's top square — or
-          tap it, then click a note — to let this chat read AND write that note.
-          On the right so the chat's output reads left-to-right (context still
-          comes in from the top). Research chats can't edit, so they get no
-          output port. */}
+      {/* the output connector, doing double duty. Tap it (or drag), then: click
+          a note to let this chat read AND write it, or click empty canvas to
+          fork the chat there. On the right so the chat's output reads
+          left-to-right (context still comes in from the top). Research chats
+          can't edit or fork meaningfully, so they get no output port. */}
       {!isResearch && (
         <Handle
           id={OUTPUT_HANDLE_ID}
@@ -193,7 +178,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
           position={Position.Right}
           isConnectable
           isConnectableEnd={false}
-          title="Drag — or tap, then click a note — to let this chat write that note"
+          title="Tap to add a chat"
           onClick={(e) => {
             e.stopPropagation()
             setCtxConnectSource(armed ? null : id)
@@ -305,13 +290,6 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
               onEdit={() => setEditingTitle(true)}
               renameHint="Rename this chat"
             />
-          )}
-          {canFork && (
-            <Tooltip label="Fork this chat from its latest message">
-              <button type="button" onClick={forkAndCenter} className={CHIP_BUTTON}>
-                <GitFork className="h-[25px] w-[25px]" />
-              </button>
-            </Tooltip>
           )}
           {!data.minimized && <TransformButton id={id} />}
           <Tooltip label="Delete this chat">
