@@ -84,6 +84,13 @@ function SubscriptionBlock({
         terminal and paste the token here. Takes precedence over the API key.
       </p>
 
+      {status?.tokenUnreadable && (
+        <p className="mb-2 text-[12px] text-amber-700">
+          A saved subscription token exists but couldn’t be decrypted (the app’s keychain identity
+          changed). It’s not being used — paste it again to restore it.
+        </p>
+      )}
+
       {usingSub && !editing ? (
         <button
           type="button"

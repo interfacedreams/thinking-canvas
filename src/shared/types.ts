@@ -29,6 +29,11 @@ export interface AuthStatus {
   apiKeySuffix: string | null // last characters of the Settings-stored API key, for display
   apiKeySource: 'settings' | 'env' | null // where the active/fallback API key comes from
   hasApiKey: boolean // an API key exists as fallback if the token is removed
+  // A stored credential exists in auth.json but could not be decrypted (e.g. the
+  // OS keychain identity changed between builds). It is NOT silently ignored:
+  // when this is set we refuse to bill the .env key and prompt a re-entry.
+  tokenUnreadable: boolean
+  apiKeyUnreadable: boolean
 }
 
 export interface PersistedMessage {
