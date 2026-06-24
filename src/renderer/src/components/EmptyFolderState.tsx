@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useReactFlow, type Viewport } from '@xyflow/react'
 import { FolderPlus } from 'lucide-react'
 import { useCanvasStore } from '../store/canvas'
-import BeeIcon from './BeeIcon'
+import CanvasMark from './CanvasMark'
 import NewFolderCard from './NewFolderCard'
 
 /**
@@ -24,7 +24,7 @@ export default function EmptyFolderState(): React.JSX.Element {
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4">
-      <BeeIcon className="h-16 w-16" />
+      <CanvasMark className="h-16 w-16" />
       <p className="text-[15px] text-[#92690B]">Pick a folder to start a canvas</p>
       {naming ? (
         <div className="w-80 overflow-hidden rounded-[6px] border border-black bg-white shadow-xl">

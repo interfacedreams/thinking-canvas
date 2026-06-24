@@ -10,7 +10,7 @@ import { RotateCcw, Telescope, TriangleAlert, Search, CheckCircle2 } from 'lucid
 import { useCanvasStore, isChat, type Message } from '../store/canvas'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
 import { MarkdownSourceContext, markdownComponents } from '../lib/markdownLink'
-import BeeIcon from './BeeIcon'
+import CanvasMark from './CanvasMark'
 import PermissionPrompt from './PermissionPrompt'
 
 function MessageView({
@@ -255,7 +255,7 @@ const ChatBody = forwardRef<
               title={streaming ? 'Waiting for the assistant to finish' : 'Send (Enter)'}
               className="transition-all hover:scale-110 active:scale-95 disabled:opacity-30"
             >
-              <BeeIcon className="h-7 w-7" />
+              <CanvasMark className="h-7 w-7" />
             </button>
           </div>
         </div>

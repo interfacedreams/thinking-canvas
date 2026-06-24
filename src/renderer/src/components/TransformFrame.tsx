@@ -3,7 +3,7 @@ import TextareaAutosize from 'react-textarea-autosize'
 import { X } from 'lucide-react'
 import { useCanvasStore, isNote } from '../store/canvas'
 import { contrastColorId, paletteFor } from '../lib/palette'
-import BeeIcon from './BeeIcon'
+import CanvasMark from './CanvasMark'
 
 /**
  * Transform mode's visible wrap: a colored header tab behind the node carrying
@@ -280,7 +280,7 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
                 cursor: canSend ? 'pointer' : 'default'
               }}
             >
-              <BeeIcon className="h-6 w-6" />
+              <CanvasMark className="h-6 w-6" />
             </button>
           </div>
         </div>

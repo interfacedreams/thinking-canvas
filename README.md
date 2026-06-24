@@ -1,8 +1,8 @@
-# bee-claude
+# thinking-canvas
 
 A canvas UI for chatting, taking notes, and reading PDFs/webpages
 
-![bee-claude](docs/screenshot.png)
+![thinking-canvas](docs/screenshot.png)
 
 ## Setup
 

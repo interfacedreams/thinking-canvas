@@ -1,37 +1,13 @@
 <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <clipPath id="beeBody">
-      <ellipse cx="120" cy="150" rx="82" ry="72" />
-    </clipPath>
-    <clipPath id="beeMouth">
-      <path d="M84 142 Q120 154 156 142 Q149 180 120 182 Q91 180 84 142 Z" />
-    </clipPath>
-  </defs>
-  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#E1EFFA" />
-  <g transform="translate(140 106) scale(3.1)">
-    <!-- antennae -->
-    <path d="M100 84 Q92 58 78 50" stroke="#111" stroke-width="6" fill="none" stroke-linecap="round" />
-    <circle cx="76" cy="48" r="8" fill="#111" />
-    <path d="M140 84 Q148 58 162 50" stroke="#111" stroke-width="6" fill="none" stroke-linecap="round" />
-    <circle cx="164" cy="48" r="8" fill="#111" />
-    <!-- wings (drawn behind the body, sticking out to the sides) -->
-    <ellipse cx="42" cy="120" rx="46" ry="25" fill="#C4C9CE" transform="rotate(-28 42 120)" />
-    <ellipse cx="198" cy="120" rx="46" ry="25" fill="#C4C9CE" transform="rotate(28 198 120)" />
-    <!-- body -->
-    <ellipse cx="120" cy="150" rx="82" ry="72" fill="#F5B82E" />
-    <g clip-path="url(#beeBody)">
-      <rect x="34" y="178" width="172" height="18" fill="#111" />
-      <rect x="34" y="206" width="172" height="16" fill="#111" />
-    </g>
-    <!-- eyes -->
-    <ellipse cx="87" cy="102" rx="33" ry="30" fill="#fff" />
-    <ellipse cx="153" cy="102" rx="33" ry="30" fill="#fff" />
-    <ellipse cx="95" cy="105" rx="13" ry="16" fill="#111" />
-    <ellipse cx="145" cy="105" rx="13" ry="16" fill="#111" />
-    <!-- mouth -->
-    <path d="M84 142 Q120 154 156 142 Q149 180 120 182 Q91 180 84 142 Z" fill="#111" />
-    <g clip-path="url(#beeMouth)">
-      <ellipse cx="120" cy="184" rx="24" ry="12" fill="#E87C90" />
-    </g>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#FFFFFF" />
+  <g transform="translate(234 234) scale(5.8)">
+    <!-- wires (drawn under the cards) -->
+    <line x1="27" y1="29" x2="46" y2="70" stroke="#B2CE7E" stroke-width="3" stroke-linecap="round" />
+    <line x1="71" y1="24" x2="46" y2="70" stroke="#E398AB" stroke-width="3" stroke-linecap="round" />
+    <line x1="27" y1="29" x2="71" y2="24" stroke="#8FBEE3" stroke-width="3" stroke-linecap="round" />
+    <!-- canvas cards: sky, rose, sage from the node palette -->
+    <rect x="10" y="18" width="34" height="22" rx="6" fill="#E1EFFA" stroke="#8FBEE3" stroke-width="2.5" />
+    <rect x="56" y="14" width="30" height="20" rx="6" fill="#FBE3E7" stroke="#E398AB" stroke-width="2.5" />
+    <rect x="28" y="58" width="36" height="24" rx="6" fill="#EAF2D9" stroke="#B2CE7E" stroke-width="2.5" />
   </g>
 </svg>

@@ -1,5 +1,5 @@
-appId: com.beeclaude.app
-productName: bee claude
+appId: com.thinkingcanvas.app
+productName: thinking canvas
 directories:
   buildResources: build
 files:
@@ -16,7 +16,7 @@ asarUnpack:
   - node_modules/@anthropic-ai/claude-agent-sdk/**
   - node_modules/@anthropic-ai/claude-agent-sdk-*/**
 win:
-  executableName: bee-claude
+  executableName: thinking-canvas
 nsis:
   artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: ${productName}
