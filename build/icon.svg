@@ -1,13 +1,13 @@
 <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#FFFFFF" />
-  <g transform="translate(234 234) scale(5.8)">
+  <g transform="translate(140 150) scale(8.2)">
     <!-- wires (drawn under the cards) -->
-    <line x1="27" y1="29" x2="46" y2="70" stroke="#B2CE7E" stroke-width="3" stroke-linecap="round" />
-    <line x1="71" y1="24" x2="46" y2="70" stroke="#E398AB" stroke-width="3" stroke-linecap="round" />
-    <line x1="27" y1="29" x2="71" y2="24" stroke="#8FBEE3" stroke-width="3" stroke-linecap="round" />
-    <!-- canvas cards: sky, rose, sage from the node palette -->
-    <rect x="10" y="18" width="34" height="22" rx="6" fill="#E1EFFA" stroke="#8FBEE3" stroke-width="2.5" />
-    <rect x="56" y="14" width="30" height="20" rx="6" fill="#FBE3E7" stroke="#E398AB" stroke-width="2.5" />
-    <rect x="28" y="58" width="36" height="24" rx="6" fill="#EAF2D9" stroke="#B2CE7E" stroke-width="2.5" />
+    <line x1="27" y1="29" x2="46" y2="70" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round" />
+    <line x1="71" y1="24" x2="46" y2="70" stroke="#F97316" stroke-width="3" stroke-linecap="round" />
+    <line x1="27" y1="29" x2="71" y2="24" stroke="#22C55E" stroke-width="3" stroke-linecap="round" />
+    <!-- canvas cards: solid fills, no outline -->
+    <rect x="10" y="18" width="34" height="22" rx="6" fill="#A78BFA" />
+    <rect x="56" y="14" width="30" height="20" rx="6" fill="#FB923C" />
+    <rect x="28" y="58" width="36" height="24" rx="6" fill="#4ADE80" />
   </g>
 </svg>
