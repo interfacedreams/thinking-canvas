@@ -723,6 +723,24 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     return !!n && isNote(n) && n.data.system === 'claudeMd'
   }
 
+  // Serialize a chat's transcript into a plain User/Assistant block — how a
+  // chat rides as context (chat → chat edge) or as a derive source that has no
+  // forkable session. `clipAt` (a message id) truncates at and including that
+  // message: used for a fork parent so the block stops at the branch anchor and
+  // never leaks the parent's later messages the fork never saw — a true fork.
+  // Empty string when nothing's been said yet.
+  const transcriptBlock = (chat: ChatNode, clipAt?: string): string => {
+    let msgs = chat.data.messages
+    if (clipAt) {
+      const i = msgs.findIndex((m) => m.id === clipAt)
+      if (i >= 0) msgs = msgs.slice(0, i + 1) // anchor not found → keep full, lose nothing
+    }
+    return msgs
+      .filter((m) => m.text)
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+      .join('\n\n')
+  }
+
   // Notes wired to a chat by context edges go along with every send — read
   // from the store, which always holds the freshest content (autosave
   // debounce notwithstanding).
@@ -735,6 +753,84 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           ? [{ id: src.id, title: src.data.title || 'Untitled note', content: src.data.content }]
           : []
       })
+
+  // The chats whose transcripts `id` already carries because its session forks
+  // from them: the direct fork-parent chain (fork of a fork resumes the whole
+  // chain). Their *transcripts* must not be re-injected as context blocks — but
+  // their *documents* still must, since a connected note lives in the system
+  // prompt, rebuilt per-send from each chat's own edges, never in the session.
+  const forkLineageOf = (id: string): Set<string> => {
+    const edges = get().edges
+    const out = new Set<string>()
+    let cur = id
+    // Only fork edges carry a sourceMessageId (context/output/derive never do).
+    for (;;) {
+      const e = edges.find((x) => x.target === cur && x.sourceMessageId)
+      if (!e || out.has(e.source)) break
+      out.add(e.source)
+      cur = e.source
+    }
+    return out
+  }
+
+  // Every chat upstream of `id`, oldest → newest, cycle-safe — the shared basis
+  // for transcript blocks (contextChatsFor) and the documents those chats carry
+  // (gathered in dispatchTurn). Upstream means, transitively:
+  //  • context-edge sources (A → B → C: C reaches B *and* A),
+  //  • fork parents — including id's OWN fork parent. A fork inherits the
+  //    parent's transcript via session resume, but NOT the parent's attached
+  //    documents (those ride the system prompt, rebuilt from the child's own
+  //    edges), so the parent must be walked to gather them. contextChatsFor
+  //    then drops the fork lineage's transcripts to avoid duplicating the
+  //    resumed session; documents from every upstream chat are kept.
+  // A fork parent rides with `clipAt` set to the branch anchor (a true fork: the
+  // parent's post-branch turns are excluded). A visited set (seeded with `id`)
+  // breaks cycles and never returns the target itself; first visit wins, and
+  // ancestry is walked before context sources, so a fork parent stays clipped.
+  const upstreamChats = (id: string): { chat: ChatNode; clipAt?: string }[] => {
+    const nodes = get().nodes
+    const edges = get().edges
+    const chatById = (nid: string): ChatNode | null => {
+      const n = nodes.find((x) => x.id === nid)
+      return n && isChat(n) ? n : null
+    }
+    const ctxSourcesOf = (chatId: string): ChatNode[] =>
+      edges
+        .filter((e) => e.kind === 'context' && e.target === chatId)
+        .map((e) => chatById(e.source))
+        .filter((n): n is ChatNode => n !== null)
+    const seen = new Set<string>([id])
+    const out: { chat: ChatNode; clipAt?: string }[] = []
+    const visit = (chat: ChatNode, clipAt?: string): void => {
+      if (seen.has(chat.id)) return
+      seen.add(chat.id)
+      const forkEdge = edges.find((x) => x.target === chat.id && x.sourceMessageId)
+      const parent = forkEdge ? chatById(forkEdge.source) : null
+      if (parent) visit(parent, forkEdge?.sourceMessageId)
+      ctxSourcesOf(chat.id).forEach((c) => visit(c))
+      out.push({ chat, clipAt })
+    }
+    // id's own fork parent is walked too (for its documents); ctxSources after,
+    // so context-connected ancestry reads after the fork lineage.
+    const ownFork = edges.find((x) => x.target === id && x.sourceMessageId)
+    const ownParent = ownFork ? chatById(ownFork.source) : null
+    if (ownParent) visit(ownParent, ownFork?.sourceMessageId)
+    ctxSourcesOf(id).forEach((c) => visit(c))
+    return out
+  }
+
+  // Upstream chats as serialized transcript blocks — same shape as a context
+  // note, so main injects them identically. Fork parents arrive clipped. The
+  // target's fork lineage is dropped: its transcript already rides the resumed
+  // session, so re-injecting it would only duplicate the conversation.
+  const contextChatsFor = (id: string): { id: string; title: string; content: string }[] => {
+    const lineage = forkLineageOf(id)
+    return upstreamChats(id).flatMap(({ chat, clipAt }) => {
+      if (lineage.has(chat.id)) return []
+      const content = transcriptBlock(chat, clipAt)
+      return content ? [{ id: chat.id, title: chat.data.title || 'Chat', content }] : []
+    })
+  }
 
   // Notes this chat may write, wired by output edges (chat → note). Their
   // content rides the system prompt like contextNotes; main also permits and
@@ -805,12 +901,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   // streaming-state update (its session/fork/injected ledger are read here).
   const dispatchTurn = (node: ChatNode, text: string, opts?: { research?: boolean }): void => {
     const id = node.id
-    const contextNotes = contextNotesFor(id)
+    const dedupeById = <T extends { id: string }>(xs: T[]): T[] => {
+      const seen = new Set<string>()
+      return xs.filter((x) => {
+        if (seen.has(x.id)) return false
+        seen.add(x.id)
+        return true
+      })
+    }
+    // Context flows up the whole tree. A document wired into an upstream chat
+    // rides this turn directly — not relied on to have soaked into that chat's
+    // transcript (it never does: a note lives in the system prompt, not the
+    // messages, and an unsent edit wouldn't be there at all). So a note added to
+    // a source chat reaches here even if that chat never re-ran with it. Deduped
+    // by node id, since the same document can hang off several chats in the tree.
+    const upstreamIds = upstreamChats(id).map((c) => c.chat.id)
+    const contextNotes = dedupeById([
+      ...contextNotesFor(id),
+      ...upstreamIds.flatMap(contextNotesFor),
+      ...contextChatsFor(id) // upstream chats themselves, as transcript blocks
+    ])
     const outputNotes = outputNotesFor(id)
     // Only files the session hasn't seen carry bytes this turn; remember them so
     // a successful turn marks them injected (a failed turn re-sends on retry).
     const injected = new Set(node.data.injectedImages ?? [])
-    const contextFiles = contextFilesFor(id).map((f) => ({ ...f, isNew: !injected.has(f.id) }))
+    const contextFiles = dedupeById([
+      ...contextFilesFor(id),
+      ...upstreamIds.flatMap(contextFilesFor)
+    ]).map((f) => ({ ...f, isNew: !injected.has(f.id) }))
     const newFileIds = contextFiles.filter((f) => f.isNew).map((f) => f.id)
     if (newFileIds.length > 0) pendingFileInjections.set(id, newFileIds)
     else pendingFileInjections.delete(id)
@@ -818,7 +936,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     // and the bubble is streaming-pending, so the await is invisible (and capped
     // by pageText's extraction timeout).
     void (async () => {
-      const contextLinks = await withPageContent(contextLinksFor(id))
+      const contextLinks = await withPageContent(
+        dedupeById([...contextLinksFor(id), ...upstreamIds.flatMap(contextLinksFor)])
+      )
       void window.api.thread.send({
         nodeId: id,
         text,
@@ -1595,10 +1715,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         })
       } else if (chatSource && !forkFrom) {
         // No forkable session — hand the transcript over as a context block.
-        const transcript = source.data.messages
-          .filter((m) => m.text)
-          .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
-          .join('\n\n')
+        const transcript = transcriptBlock(source)
         if (transcript) {
           contextNotes.push({
             id: source.id,
@@ -1639,7 +1756,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const s = get()
       const src = s.nodes.find((n) => n.id === sourceId)
       const tgt = s.nodes.find((n) => n.id === chatId)
-      if (!src || !tgt || !(isNote(src) || isFile(src) || isLink(src)) || !isChat(tgt)) return
+      if (!src || !tgt || sourceId === chatId || !isChat(tgt)) return
+      // A note/file/link feeds a chat as context; a chat can also feed another
+      // chat (its transcript rides along). Research chats take no context.
+      const validSrc =
+        isNote(src) || isFile(src) || isLink(src) || (isChat(src) && src.data.kind !== 'research')
+      if (!validSrc) return
       if (tgt.data.kind === 'research') return
       if (s.edges.some((e) => e.kind === 'context' && e.source === sourceId && e.target === chatId))
         return // already connected

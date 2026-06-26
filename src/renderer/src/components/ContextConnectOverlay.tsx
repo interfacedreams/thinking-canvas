@@ -43,10 +43,13 @@ const isCtxSource = (n: CanvasNode): boolean =>
 const chatForkable = (n: CanvasNode): boolean =>
   isChat(n) && n.data.messages.some((m) => m.role === 'assistant' && m.uuid)
 
-// Given the armed source, is `n` a valid drop target? A chat source feeds
-// notes; any other source feeds chats.
+// Given the armed source, is `n` a valid drop target? A chat source feeds a
+// note (output) or another chat (its transcript as context); any other source
+// feeds chats. Research chats never take context, so they're never a target.
 const isCtxTarget = (source: CanvasNode, n: CanvasNode): boolean =>
-  isChat(source) ? isNote(n) : isChat(n) && n.data.kind !== 'research'
+  isChat(source)
+    ? isNote(n) || (isChat(n) && n.id !== source.id && n.data.kind !== 'research')
+    : isChat(n) && n.data.kind !== 'research'
 
 // Circle geometry mirrors ctxHandleStyle: a target's input sits 15px above the
 // top edge; a source's output sits 19px past the right edge. Radius 12 — the
@@ -84,7 +87,18 @@ const sourceCircleRight = (n: CanvasNode): { x: number; y: number } => ({
 
 function hits(n: CanvasNode, p: { x: number; y: number }, radius: number): boolean {
   const c = chatCircleCenter(n)
-  return Math.hypot(p.x - c.x, p.y - c.y) <= radius
+  if (Math.hypot(p.x - c.x, p.y - c.y) <= radius) return true
+  // Anywhere over the target card itself counts too — aiming at the tiny top
+  // circle is fussy, and "drop on the node" is what people expect. The arrow
+  // still snaps to the circle visually; this only widens where a click lands.
+  const w = n.width ?? n.measured?.width ?? NODE_W
+  const h = n.height ?? n.measured?.height ?? 0
+  return (
+    p.x >= n.position.x &&
+    p.x <= n.position.x + w &&
+    p.y >= n.position.y &&
+    p.y <= n.position.y + h
+  )
 }
 
 function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | null {
@@ -145,16 +159,22 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
     return () => window.removeEventListener('pointermove', onMove)
   }, [screenToFlowPosition, getZoom, sourceId])
 
-  // Snapped click commits; any other click cancels. The arming tap never
-  // lands here: these listeners attach a tick after it finished propagating
-  // (and the circles stopPropagation besides).
+  // Snapped release commits; any other release cancels. We listen on pointerup,
+  // not click: React Flow drives nodes with d3-drag, which swallows the click
+  // that follows a pointer-down on a node (stopImmediatePropagation in the
+  // bubble phase) — so a click landing on a target chat never arrives. A
+  // capture-phase pointerup runs before d3's bubble-phase suppressor and lands.
+  // The arming tap never reaches here: this listener attaches a tick after it
+  // finished, and the knob stopPropagation's besides.
   useEffect(() => {
-    const onClick = (e: MouseEvent): void => {
+    const onCommit = (e: PointerEvent): void => {
       const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
       if (snapRef.current) {
-        // Snapped onto a target: a chat source commits an output edge, a
-        // resource source commits a context edge.
-        if (src && isChat(src)) addOutputEdge(sourceId, snapRef.current)
+        // Snapped onto a target. A chat source drives a note (output edge) but
+        // feeds another chat as context; a resource source always commits a
+        // context edge.
+        const tgt = useCanvasStore.getState().nodes.find((n) => n.id === snapRef.current)
+        if (src && isChat(src) && tgt && isNote(tgt)) addOutputEdge(sourceId, snapRef.current)
         else addContextEdge(sourceId, snapRef.current)
       } else if (
         src &&
@@ -212,10 +232,10 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       setCtxConnectSource(null)
       spawn(kind)
     }
-    window.addEventListener('click', onClick)
+    window.addEventListener('pointerup', onCommit, true)
     window.addEventListener('keydown', onKey)
     return () => {
-      window.removeEventListener('click', onClick)
+      window.removeEventListener('pointerup', onCommit, true)
       window.removeEventListener('keydown', onKey)
     }
   }, [
@@ -248,8 +268,8 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
     ? 'Click to connect'
     : isChat(sourceNode)
       ? canFork
-        ? 'Click empty space to fork · a note to connect · C / N to drop one'
-        : 'Click a note to connect · C / N to drop one'
+        ? 'Click empty space to fork · a note or chat to connect · C / N to drop one'
+        : 'Click a note or chat to connect · C / N to drop one'
       : 'Click a chat to connect · C to drop one'
   const [path] = getBezierPath({
     sourceX: s.x,

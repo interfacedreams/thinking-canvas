@@ -143,6 +143,18 @@ function CanvasInner(): React.JSX.Element {
       if (e.altKey || e.repeat) return
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
+      // Backspace / Delete removes selected labels directly (no confirm modal,
+      // matching their floating trash button). Restricted to labels so the key
+      // can't nuke a chat with messages from under the canvas.
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        const s = useCanvasStore.getState()
+        const labels = s.nodes.filter((n) => n.selected && isLabel(n))
+        if (labels.length > 0) {
+          e.preventDefault()
+          labels.forEach((n) => s.deleteChat(n.id, false))
+        }
+        return
+      }
       // While a click-to-connect is armed, the connect overlay owns C / N / F / T / L
       // — it drops the new node already wired to the source.
       if (useCanvasStore.getState().ctxConnectSource) return
@@ -397,12 +409,16 @@ function CanvasInner(): React.JSX.Element {
               const accent = paletteFor(nodes.find((n) => n.id === e.source)?.data.color).accent
               if (e.kind === 'context') {
                 // context connectors run top circle → top circle in the
-                // note's accent, arrowhead marking which way context flows
+                // source's accent, arrowhead marking which way context flows.
+                // A chat source has no top circle to emit from — it leaves from
+                // its right knob (OUTPUT_HANDLE_ID), where it was pulled from.
+                const srcNode = nodes.find((n) => n.id === e.source)
+                const chatSource = !!srcNode && isChat(srcNode)
                 return {
                   id: e.id,
                   source: e.source,
                   target: e.target,
-                  sourceHandle: CTX_HANDLE_ID,
+                  sourceHandle: chatSource ? OUTPUT_HANDLE_ID : CTX_HANDLE_ID,
                   targetHandle: CTX_HANDLE_ID,
                   type: 'context',
                   style: { stroke: accent, strokeWidth: 3 },
