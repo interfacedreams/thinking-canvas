@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useCanvasStore, forkSubtree, isFile, isLink, isNote } from '../store/canvas'
 
 function Dialog({ pendingId }: { pendingId: string }): React.JSX.Element {
@@ -18,6 +18,14 @@ function Dialog({ pendingId }: { pendingId: string }): React.JSX.Element {
   // "Delete forked chats" is a per-use choice — the dialog is keyed by chat id,
   // so this state mounts fresh (unchecked) every time the modal opens.
   const [cascade, setCascade] = useState(false)
+
+  // Focus the Delete button on open so Enter confirms immediately. autoFocus is
+  // unreliable here: the trash chip that opened the dialog still holds focus, so
+  // we claim it explicitly once the dialog has mounted.
+  const deleteRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    deleteRef.current?.focus()
+  }, [])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -82,8 +90,8 @@ function Dialog({ pendingId }: { pendingId: string }): React.JSX.Element {
             Cancel
           </button>
           <button
+            ref={deleteRef}
             type="button"
-            autoFocus
             onClick={() => deleteChat(pendingId, cascade)}
             className="cursor-pointer rounded-[10px] bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-red-700 active:scale-95"
           >

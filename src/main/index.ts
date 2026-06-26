@@ -1150,8 +1150,11 @@ const BASE_APPEND =
   'This is a thinking canvas, not a code repository: you may pull in any relevant ' +
   "files from the memory index but otherwise don't explore the filesystem unless " +
   "explicitly asked. Also don't do any building or producing artifacts like HTML. " +
-  'Do not do deep research except if explicitly asked via the term "research" or ' +
-  'some mention of effort like "search thoroughly".'
+  'Research mode is NOT selected for this request, so never run a deep research ' +
+  'workflow on your own. If the request seems like it would benefit from deep ' +
+  'research (or uses the term "research" or mentions effort like "search ' +
+  'thoroughly"), do not start researching — first ask the user "Do you want me to ' +
+  'run a deep research workflow for this?" and wait for their answer before proceeding.'
 
 const RESEARCH_APPEND =
   'Research mode is on for this request. Plan briefly, then spawn 2-3 researcher subagents IN PARALLEL ' +
