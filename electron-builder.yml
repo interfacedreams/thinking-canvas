@@ -23,6 +23,10 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # dmg = what people download; zip = what electron-updater uses to self-update.
+  target:
+    - dmg
+    - zip
   entitlementsInherit: build/entitlements.mac.plist
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -45,5 +49,6 @@ appImage:
   artifactName: ${productName}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: interfacedreams
+  repo: thinking-canvas

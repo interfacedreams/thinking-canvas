@@ -20,6 +20,7 @@ import {
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
+import { initAutoUpdater } from './updater'
 import {
   BROWSE_PARTITION,
   DEFAULT_EFFORT,
@@ -2611,6 +2612,10 @@ app.whenReady().then(async () => {
   // Loads filter lists (cached after first run) and applies blocking to the
   // browse session — fired non-blocking so it never delays window creation.
   void initAdblock()
+
+  // Check GitHub Releases for a newer version and self-update in the background.
+  // No-op in dev (unpackaged); only runs in a real build.
+  initAutoUpdater()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

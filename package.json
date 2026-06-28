@@ -16,6 +16,7 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
+    "release:mac": "electron-vite build && electron-builder --mac --publish always",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "@tiptap/starter-kit": "3.27.1",
     "@xyflow/react": "^12.11.0",
     "defuddle": "^0.18.1",
+    "electron-updater": "^6.8.9",
     "katex": "^0.16.4",
     "lucide-react": "^1.17.0",
     "pdfjs-dist": "^6.0.227",
