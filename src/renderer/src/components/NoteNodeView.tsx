@@ -6,7 +6,7 @@ import {
   ResizeControlVariant,
   type NodeProps
 } from '@xyflow/react'
-import { Brain, ChevronLeft, ChevronRight, Minus, Trash2 } from 'lucide-react'
+import { Brain, ChevronLeft, ChevronRight, Minus, Plus, Trash2 } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, notePager, type NoteNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -263,13 +263,15 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
           data.minimized ? 'rounded-[13px]' : 'rounded-t-[13px] border-b border-(--np-edge)'
         }`}
       >
-        {!data.minimized && (
-          <Tooltip label="Minimize">
+        <Tooltip label={data.minimized ? 'Expand' : 'Minimize'}>
           <button type="button" onClick={() => toggleMinimize(id)} className={CHIP_BUTTON}>
-            <Minus className="h-[25px] w-[25px]" />
+            {data.minimized ? (
+              <Plus className="h-[25px] w-[25px]" />
+            ) : (
+              <Minus className="h-[25px] w-[25px]" />
+            )}
           </button>
-          </Tooltip>
-        )}
+        </Tooltip>
         <PanelChips mode={mode} open={open} />
         {isClaudeMd ? (
           <span className="min-w-0 flex-1 truncate text-[23px] font-medium text-(--np-deep)">

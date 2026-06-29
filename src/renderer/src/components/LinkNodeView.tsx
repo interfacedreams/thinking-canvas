@@ -6,7 +6,7 @@ import {
   ResizeControlVariant,
   type NodeProps
 } from '@xyflow/react'
-import { Brain, Minus, Trash2 } from 'lucide-react'
+import { Brain, Minus, Plus, Trash2 } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type LinkNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -35,7 +35,7 @@ const RESIZE_LIMITS = { minWidth: 280, minHeight: 160, maxHeight: MAX_NODE_H }
 
 function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.Element {
   const setTitle = useCanvasStore((s) => s.setTitle)
-  const requestDelete = useCanvasStore((s) => s.requestDelete)
+  const deleteChat = useCanvasStore((s) => s.deleteChat)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
@@ -180,13 +180,15 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           data.minimized ? 'rounded-[13px]' : 'rounded-t-[13px] border-b border-(--np-edge)'
         }`}
       >
-        {!data.minimized && (
-          <Tooltip label="Minimize">
-            <button type="button" onClick={() => toggleMinimize(id)} className={CHIP_BUTTON}>
+        <Tooltip label={data.minimized ? 'Expand' : 'Minimize'}>
+          <button type="button" onClick={() => toggleMinimize(id)} className={CHIP_BUTTON}>
+            {data.minimized ? (
+              <Plus className="h-[25px] w-[25px]" />
+            ) : (
               <Minus className="h-[25px] w-[25px]" />
-            </button>
-          </Tooltip>
-        )}
+            )}
+          </button>
+        </Tooltip>
         <PanelChips mode={mode} open={open} />
         {bare ? (
           <span className="min-w-0 flex-1" />
@@ -276,7 +278,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           )}
           {!data.minimized && !docked && <TransformButton id={id} />}
           <Tooltip label="Delete this tab">
-            <button type="button" onClick={() => requestDelete(id)} className={CHIP_BUTTON}>
+            <button type="button" onClick={() => deleteChat(id, false)} className={CHIP_BUTTON}>
               <Trash2 className="h-[25px] w-[25px]" />
             </button>
           </Tooltip>

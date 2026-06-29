@@ -143,15 +143,15 @@ function CanvasInner(): React.JSX.Element {
       if (e.altKey || e.repeat) return
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
-      // Backspace / Delete removes selected labels directly (no confirm modal,
-      // matching their floating trash button). Restricted to labels so the key
-      // can't nuke a chat with messages from under the canvas.
+      // Backspace / Delete removes the selected node(s) directly — no confirm
+      // modal — except notes, which still pop the confirmation dialog since
+      // their text isn't recoverable. Forks are left in place (cascade = false).
       if (e.key === 'Backspace' || e.key === 'Delete') {
         const s = useCanvasStore.getState()
-        const labels = s.nodes.filter((n) => n.selected && isLabel(n))
-        if (labels.length > 0) {
+        const selected = s.nodes.filter((n) => n.selected)
+        if (selected.length > 0) {
           e.preventDefault()
-          labels.forEach((n) => s.deleteChat(n.id, false))
+          selected.forEach((n) => (isNote(n) ? s.requestDelete(n.id) : s.deleteChat(n.id, false)))
         }
         return
       }
