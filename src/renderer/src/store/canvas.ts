@@ -367,15 +367,6 @@ function boxOf(n: CanvasNode): Rect {
   }
 }
 
-function intersects(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
-}
-
-/** Overlap test with the required clearance baked in. */
-function tooClose(a: Rect, b: Rect): boolean {
-  return intersects({ x: a.x - GAP, y: a.y - GAP, w: a.w + 2 * GAP, h: a.h + 2 * GAP }, b)
-}
-
 /** A node plus every chat forked from it, transitively (fork edges run source → target).
  *  Context and derive edges don't count — a note feeding (or derived from) a
  *  chat is its own free-stander, not owned by the chat. */
@@ -396,33 +387,14 @@ export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string>
 }
 
 /**
- * Forks land to the right of their parent and just beneath its top, giving a
- * cascading down-and-right offset. Forks sharing an anchor message queue up:
- * each new one starts just beneath the bottom-most existing sibling. If the
- * spot overlaps a chat further down, the fork slides down to sit just below
- * whatever's in the way (one GAP of padding), repeating until clear.
+ * Forks land directly to the right of their parent, level with its top — no
+ * cascading and no overlap-avoidance. Siblings and anything in the way are
+ * ignored: the fork may land on top of another card, and the user drags it
+ * wherever they want it.
  */
-function findForkSpot(
-  nodes: CanvasNode[],
-  parent: ChatNode,
-  siblings: CanvasNode[]
-): { x: number; y: number } {
-  const boxes = nodes.map(boxOf)
+function findForkSpot(parent: ChatNode): { x: number; y: number } {
   const p = boxOf(parent)
-  // To the right of the parent, top dropped one GAP below the parent's top.
-  const x = p.x + p.w + GAP
-  let y = p.y + GAP
-  if (siblings.length > 0) {
-    const lowest = siblings.map(boxOf).reduce((a, b) => (b.y + b.h > a.y + a.h ? b : a))
-    y = lowest.y + lowest.h + GAP
-  }
-  // Slide down past anything in the way, settling just below it with padding.
-  for (;;) {
-    const hit = boxes.find((b) => tooClose({ x, y, w: NODE_W, h: EST_NODE_H }, b))
-    if (!hit) break
-    y = hit.y + hit.h + GAP
-  }
-  return { x, y }
+  return { x: p.x + p.w + GAP, y: p.y }
 }
 
 interface CanvasState {
@@ -544,6 +516,10 @@ interface CanvasState {
   // Fork the chat at its tip. With `at`, the new node's top-left lands there
   // (click-to-place from the output knob); without it, findForkSpot picks a slot.
   forkChat: (nodeId: string, at?: { x: number; y: number }) => string | null
+  // Highlight-to-fork: spawn a chat from `sourceId` (a chat forks; a note/file/
+  // link spawns a chat wired as context), auto-placed to the right, then send
+  // `prompt` immediately. Returns the new chat's id, or null if nothing spawned.
+  forkAndSend: (sourceId: string, prompt: string) => string | null
   // Derive a fresh note from any node + an instruction: spawn a note to the
   // right wired back by a 'derive' edge, then run an editing turn grounded in
   // the source (a chat forks its session; a note/file/link rides as context).
@@ -1661,17 +1637,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const sessionId = parent.data.sessionId
       if (!anchor?.uuid || !sessionId) return null
 
-      // Existing forks of this same anchor — the new one slots in beneath them.
-      const siblingIds = new Set(
-        get()
-          .edges.filter((e) => e.source === parent.id && e.sourceMessageId === anchor.id)
-          .map((e) => e.target)
-      )
-      const siblings = get().nodes.filter((n) => siblingIds.has(n.id))
-
       // The forked session carries the parent's context up to the anchor —
       // the node's transcript starts clean and shows only what diverges.
-      const node = makeNode(at ?? findForkSpot(get().nodes, parent, siblings), {
+      const node = makeNode(at ?? findForkSpot(parent), {
         // Start untitled like a fresh chat; the title is generated from the
         // fork's own first turn rather than inherited from the parent.
         color: parent.data.color, // forks stay in the parent's color family
@@ -1701,6 +1669,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
       persist()
       return node.id
+    },
+
+    forkAndSend: (sourceId, prompt) => {
+      const src = get().nodes.find((n) => n.id === sourceId)
+      if (!src) return null
+      // A chat forks at its tip (transcript carries the quoted passage as
+      // context); a note/file/link spawns a fresh chat wired to read it. Both
+      // helpers auto-place the new card just right of the source.
+      const newId = isChat(src)
+        ? get().forkChat(sourceId)
+        : isNote(src) || isFile(src) || isLink(src)
+          ? get().chatAbout(sourceId)
+          : null
+      if (!newId) return null
+      get().setDraft(newId, prompt)
+      get().send(newId)
+      return newId
     },
 
     // Generalizes the old "distill chat → note": works from any node, with a

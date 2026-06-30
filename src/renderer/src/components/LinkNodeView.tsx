@@ -13,7 +13,6 @@ import { usePanel } from '../lib/usePanel'
 import TabBrowser, { LinkSearch } from './TabBrowser'
 import DockedStub from './DockedStub'
 import PanelChips from './PanelChips'
-import NewChatButton from './NewChatButton'
 import TransformButton from './TransformButton'
 import Tooltip from './Tooltip'
 import TransformFrame from './TransformFrame'
@@ -140,8 +139,6 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
       >
         {data.pinned && <Brain className="pointer-events-none h-4 w-4 text-white" />}
       </Handle>
-      {/* armed: a "New Chat" pill appears to the right of the connector */}
-      {armed && <NewChatButton id={id} />}
 
       {!data.minimized && !docked && data.url && (
         <>

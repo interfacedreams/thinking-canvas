@@ -13,7 +13,6 @@ import { usePanel } from '../lib/usePanel'
 import NoteBody from './NoteBody'
 import DockedStub from './DockedStub'
 import PanelChips from './PanelChips'
-import NewChatButton from './NewChatButton'
 import TransformButton from './TransformButton'
 import Tooltip from './Tooltip'
 import TransformFrame from './TransformFrame'
@@ -219,8 +218,6 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
       >
         {inMemory && <Brain className="pointer-events-none h-4 w-4 text-white" />}
       </Handle>
-      {/* armed: a "New Chat" pill appears to the right of the connector */}
-      {armed && <NewChatButton id={id} />}
 
       {!data.minimized && (
         <>

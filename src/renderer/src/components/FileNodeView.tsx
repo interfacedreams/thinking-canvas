@@ -13,7 +13,6 @@ import { usePanel } from '../lib/usePanel'
 import FileBody from './FileBody'
 import DockedStub from './DockedStub'
 import PanelChips from './PanelChips'
-import NewChatButton from './NewChatButton'
 import TransformButton from './TransformButton'
 import Tooltip from './Tooltip'
 import TransformFrame from './TransformFrame'
@@ -135,8 +134,6 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
       >
         {data.pinned && <Brain className="pointer-events-none h-4 w-4 text-white" />}
       </Handle>
-      {/* armed: a "New Chat" pill appears to the right of the connector */}
-      {armed && <NewChatButton id={id} />}
 
       {!data.minimized && (
         <>

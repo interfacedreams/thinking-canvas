@@ -37,7 +37,10 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
 dmg:
-  artifactName: ${productName}-${version}.${ext}
+  # Version-less name so the website's "Download" button can point at a stable
+  # URL: github.com/<owner>/<repo>/releases/latest/download/thinking-canvas-mac.dmg
+  # (electron-updater uses the versioned .zip + latest-mac.yml, not this dmg.)
+  artifactName: thinking-canvas-mac.${ext}
 linux:
   target:
     - AppImage

@@ -29,6 +29,7 @@ import FolderChip from './FolderChip'
 import Sidebar from './Sidebar'
 import SettingsButton from './SettingsButton'
 import PlacementOverlay from './PlacementOverlay'
+import SelectionForkMenu from './SelectionForkMenu'
 import DeleteChatModal from './DeleteChatModal'
 import ExpandedPanel from './ExpandedPanel'
 import Toast from './Toast'
@@ -527,6 +528,7 @@ function CanvasInner(): React.JSX.Element {
         )}
 
         {loaded && <PlacementOverlay />}
+        {loaded && <SelectionForkMenu />}
 
         {/* Corner legends replace the old app header. z-20 keeps them above
             the placement layer (z-10), so an armed spawn button can still be
