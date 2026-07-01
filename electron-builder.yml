@@ -55,3 +55,9 @@ publish:
   provider: github
   owner: interfacedreams
   repo: thinking-canvas
+  # Publish a live release directly instead of a draft. Without this,
+  # electron-builder defaults to a draft that must be published by hand in the
+  # GitHub UI — an easy step to forget, which strands the update feed on the
+  # previous version (exactly what happened with 0.1.7). Auto-update needs the
+  # release live for latest-mac.yml to be served.
+  releaseType: release
