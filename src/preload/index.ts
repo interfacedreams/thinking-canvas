@@ -119,6 +119,13 @@ const api = {
     onEvent: (cb: (event: ThreadEvent) => void): void => {
       ipcRenderer.on('thread:event', (_e, payload: ThreadEvent) => cb(payload))
     }
+  },
+  updates: {
+    // Fires while an opted-in update downloads; done=true when the bytes are in
+    // (the restart prompt takes over from there).
+    onProgress: (cb: (p: { percent: number; done: boolean }) => void): void => {
+      ipcRenderer.on('update:progress', (_e, p: { percent: number; done: boolean }) => cb(p))
+    }
   }
 }
 

@@ -33,6 +33,7 @@ import SelectionForkMenu from './SelectionForkMenu'
 import DeleteChatModal from './DeleteChatModal'
 import ExpandedPanel from './ExpandedPanel'
 import Toast from './Toast'
+import UpdateProgress from './UpdateProgress'
 import { useToastStore } from '../store/toast'
 import { useCanvasStore, NODE_W, isChat, isNote, isFile, isLink, isLabel } from '../store/canvas'
 import type { ChosenFile } from '../../../shared/types'
@@ -560,6 +561,9 @@ function CanvasInner(): React.JSX.Element {
 
       {/* swooping error banner (unsupported drops, etc.) */}
       <Toast />
+
+      {/* download progress while an opted-in update is fetching */}
+      <UpdateProgress />
     </div>
   )
 }

@@ -29,6 +29,15 @@ export function initAutoUpdater(): void {
     console.error('[updater] error:', err)
   })
 
+  // Feed download progress to the Dock icon and the renderer's in-app pill so
+  // the (opt-in) download doesn't feel like a silent hang.
+  autoUpdater.on('download-progress', (p) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win || win.isDestroyed()) return
+    win.setProgressBar(p.percent / 100)
+    win.webContents.send('update:progress', { percent: p.percent, done: false })
+  })
+
   // A newer version exists — offer it. Downloads only if the user clicks.
   autoUpdater.on('update-available', (info) => {
     if (prompting) return
@@ -55,6 +64,10 @@ export function initAutoUpdater(): void {
   // Download finished — offer to restart into it.
   autoUpdater.on('update-downloaded', (info) => {
     const win = BrowserWindow.getAllWindows()[0]
+    if (win && !win.isDestroyed()) {
+      win.setProgressBar(-1) // clear the Dock bar
+      win.webContents.send('update:progress', { percent: 100, done: true })
+    }
     dialog
       .showMessageBox(win, {
         type: 'info',
