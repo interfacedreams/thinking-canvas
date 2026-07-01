@@ -65,7 +65,14 @@ export function initAutoUpdater(): void {
         detail: 'Restart thinking canvas to finish updating.'
       })
       .then(({ response }) => {
-        if (response === 0) autoUpdater.quitAndInstall()
+        if (response !== 0) return
+        // (isSilent=false, isForceRunAfter=true): install and relaunch into
+        // the new version. Squirrel's ShipIt only swaps the bundle once THIS
+        // process dies — and on macOS quitAndInstall can leave the process
+        // alive (window closes, process lingers), which strands the install.
+        // Force an exit shortly after as a guaranteed-termination fallback.
+        autoUpdater.quitAndInstall(false, true)
+        setTimeout(() => app.exit(0), 2000)
       })
       .catch(() => {})
   })
