@@ -21,7 +21,7 @@ export default function ModelSelector(): React.JSX.Element {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title={current.id}
-        className="flex cursor-pointer items-center gap-2 rounded-[6px] border border-black bg-white px-3 py-1.5 text-[13px] font-medium text-black shadow-md transition-colors hover:bg-neutral-100"
+        className="flex h-9 cursor-pointer items-center gap-2 rounded-[6px] border border-black bg-white px-3 text-[13px] font-medium text-black shadow-md transition-colors hover:bg-neutral-100"
       >
         <Cpu className="h-3.5 w-3.5 shrink-0" />
         <span>{current.label}</span>

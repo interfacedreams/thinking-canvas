@@ -16,21 +16,21 @@ export const CHIP_BUTTON_ACTIVE =
 // Interactive children opt out with `nodrag` (CHIP_BUTTON includes it).
 export const DRAG_HEADER = 'drag-handle cursor-grab active:cursor-grabbing'
 
-// The context connector: the grabbable shape floating just outside every
-// resource (notes, images, tabs — below them) and chat (above it) — so a
-// source sitting above a chat reads as a clean downward flow. Resources drag
-// from theirs; chats receive. One id serves all since handle ids are scoped
-// per node. Resources wear a square, chats a circle — the same shape coding
-// the sidebar list uses. Both sit the same distance (15px) outside their node.
-export const CTX_HANDLE_ID = 'ctx'
-
-// The output connector wires a chat → note (the chat may write the note). The
-// chat emits from a circle below it (OUTPUT_HANDLE_ID); the note receives into
-// a square above it (INPUT_HANDLE_ID). Distinct ids from CTX_HANDLE_ID so a
-// chat (top input + bottom output) and a note (bottom output + top input) can
-// each carry both ports without a within-node id collision.
-export const OUTPUT_HANDLE_ID = 'ctx-out'
-export const INPUT_HANDLE_ID = 'ctx-in'
+// The connection knob: ONE grabbable shape floating above every node.
+// Connections are undirected — drag any knob onto any other node (or tap,
+// then click one) and the pair is wired; what a connection does comes from
+// the node kinds (+ toggles and asking), never from which way it was drawn.
+// Resources wear a square, chats a circle — the same shape coding the
+// sidebar list uses.
+//
+// React Flow still needs a source and a target handle to complete a drag, so
+// every knob is a stacked pair at the same spot: the visible knob is the
+// SOURCE (owns all pointer gestures — drag out, tap to arm) and an invisible
+// same-size TARGET sits underneath to receive drops (connectionRadius snaps
+// by handle position, not pointer-events). Edges always render source-knob →
+// target-knob, indistinguishable since both live at the same point.
+export const CTX_HANDLE_ID = 'ctx' // the target half
+export const OUTPUT_HANDLE_ID = 'ctx-out' // the source half (the visible knob)
 
 // Sizing/placement is inline because React Flow's stylesheet pins handles to
 // a 6px dot; hover/snap effects live in main.css under .ctx-handle.
@@ -52,6 +52,16 @@ export const ctxHandleStyle = (
   background: accent,
   border: '2px solid #FFFFFF',
   boxShadow: '0 1px 4px rgba(0, 0, 0, 0.2)'
+})
+
+// The invisible drop-target half of the knob pair — same geometry as the
+// visible knob so snapping lands exactly where the user aims.
+export const ctxTargetStyle = (): React.CSSProperties => ({
+  ...ctxHandleStyle('transparent'),
+  border: 'none',
+  boxShadow: 'none',
+  opacity: 0,
+  pointerEvents: 'none'
 })
 
 // React Flow's default handle is a visible 6px dot — these are layout anchors only.

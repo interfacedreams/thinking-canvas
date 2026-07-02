@@ -35,9 +35,9 @@ import ExpandedPanel from './ExpandedPanel'
 import Toast from './Toast'
 import UpdateProgress from './UpdateProgress'
 import { useToastStore } from '../store/toast'
-import { useCanvasStore, NODE_W, isChat, isNote, isFile, isLink, isLabel } from '../store/canvas'
+import { useCanvasStore, NODE_W, isNote, isFile, isLink, isLabel } from '../store/canvas'
 import type { ChosenFile } from '../../../shared/types'
-import { CTX_HANDLE_ID, OUTPUT_HANDLE_ID, INPUT_HANDLE_ID } from '../lib/nodeChrome'
+import { CTX_HANDLE_ID, OUTPUT_HANDLE_ID } from '../lib/nodeChrome'
 import { paletteFor } from '../lib/palette'
 import { useSpawn } from '../lib/useSpawn'
 
@@ -98,7 +98,6 @@ function CanvasInner(): React.JSX.Element {
   const folder = useCanvasStore((s) => s.folder)
   const onNodesChange = useCanvasStore((s) => s.onNodesChange)
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
-  const addOutputEdge = useCanvasStore((s) => s.addOutputEdge)
   const addNodeAt = useCanvasStore((s) => s.addNodeAt)
   const addNoteAt = useCanvasStore((s) => s.addNoteAt)
   const addLinkAt = useCanvasStore((s) => s.addLinkAt)
@@ -200,18 +199,13 @@ function CanvasInner(): React.JSX.Element {
   // re-validates.
   const handleConnect = useCallback(
     (conn: Connection) => {
-      // A drag from a chat's bottom circle to a note's top square is an output
-      // edge (chat writes note); everything else is a resource → chat context
-      // edge. Route by node kind — the stores re-validate either way.
-      const nodes = useCanvasStore.getState().nodes
-      const src = nodes.find((n) => n.id === conn.source)
-      const tgt = nodes.find((n) => n.id === conn.target)
-      if (src && tgt && isChat(src) && isNote(tgt)) addOutputEdge(conn.source, conn.target)
-      else addContextEdge(conn.source, conn.target)
+      // Connections are undirected — whatever pair of knobs the drag joined,
+      // one connection lands; the store validates (at least one chat).
+      addContextEdge(conn.source, conn.target)
       // a drag-connect landing mid click-to-connect supersedes it
       useCanvasStore.getState().setCtxConnectSource(null)
     },
-    [addContextEdge, addOutputEdge]
+    [addContextEdge]
   )
 
   // Shift+click multi-select doubles as connect: holding Shift and clicking two
@@ -409,67 +403,54 @@ function CanvasInner(): React.JSX.Element {
             nodes={layeredNodes}
             edges={storeEdges.map((e) => {
               const accent = paletteFor(nodes.find((n) => n.id === e.source)?.data.color).accent
-              if (e.kind === 'context') {
-                // context connectors run top circle → top circle in the
-                // source's accent, arrowhead marking which way context flows.
-                // A chat source has no top circle to emit from — it leaves from
-                // its right knob (OUTPUT_HANDLE_ID), where it was pulled from.
+              if (e.kind === 'context' || e.kind === 'output') {
+                // Connections are undirected: one arrowless wire, knob to
+                // knob, in the drawn-from node's accent ('output' is a
+                // legacy kind that renders identically). Every node's knob
+                // is the same stacked pair, so source/target handle ids are
+                // fixed regardless of which way the wire was drawn. While a
+                // computer-use turn drives a connected tab, its wire
+                // animates (the link node carries the runtime `driven` flag
+                // — the tab can sit at either end).
                 const srcNode = nodes.find((n) => n.id === e.source)
-                const chatSource = !!srcNode && isChat(srcNode)
-                return {
-                  id: e.id,
-                  source: e.source,
-                  target: e.target,
-                  sourceHandle: chatSource ? OUTPUT_HANDLE_ID : CTX_HANDLE_ID,
-                  targetHandle: CTX_HANDLE_ID,
-                  type: 'context',
-                  style: { stroke: accent, strokeWidth: 3 },
-                  markerEnd: {
-                    type: MarkerType.ArrowClosed,
-                    color: accent,
-                    width: 14,
-                    height: 14
-                  },
-                  focusable: false,
-                  selectable: false
-                }
-              }
-              if (e.kind === 'output') {
-                // output connectors run the chat's bottom circle → the note's
-                // top square in the chat's accent, arrowhead on the note end.
-                // Same renderer as context; only the handles differ.
+                const tgtNode = nodes.find((n) => n.id === e.target)
+                const driven =
+                  (!!srcNode && isLink(srcNode) && srcNode.data.driven === true) ||
+                  (!!tgtNode && isLink(tgtNode) && tgtNode.data.driven === true)
                 return {
                   id: e.id,
                   source: e.source,
                   target: e.target,
                   sourceHandle: OUTPUT_HANDLE_ID,
-                  targetHandle: INPUT_HANDLE_ID,
+                  targetHandle: CTX_HANDLE_ID,
                   type: 'context',
+                  animated: driven,
                   style: { stroke: accent, strokeWidth: 3 },
-                  markerEnd: {
-                    type: MarkerType.ArrowClosed,
-                    color: accent,
-                    width: 14,
-                    height: 14
-                  },
                   focusable: false,
                   selectable: false
                 }
               }
               if (e.kind === 'derive') {
-                // derive connectors run source's right edge → note's left edge
-                // in the source's accent, arrowhead marking the note it made
+                // derive connectors run source's right edge → note's left edge.
+                // Provenance, not data flow: it records where the note came
+                // from and never affects a send — so it renders as a faint
+                // dashed stamp (thin, translucent) instead of a live pipe.
                 return {
                   id: e.id,
                   source: e.source,
                   target: e.target,
                   type: 'derive',
-                  style: { stroke: accent, strokeWidth: 3 },
+                  style: {
+                    stroke: accent,
+                    strokeWidth: 2,
+                    strokeDasharray: '6 5',
+                    opacity: 0.55
+                  },
                   markerEnd: {
                     type: MarkerType.ArrowClosed,
                     color: accent,
-                    width: 14,
-                    height: 14
+                    width: 12,
+                    height: 12
                   },
                   focusable: false,
                   selectable: false
@@ -481,14 +462,16 @@ function CanvasInner(): React.JSX.Element {
                 target: e.target,
                 type: 'fork',
                 data: { sourceMessageId: e.sourceMessageId },
-                // fork connectors take the parent chat's accent color;
-                // researcher connectors are dashed to read as ephemeral spawns
+                // fork connectors take the parent chat's accent color, faded
+                // and dashed — the one visual grammar: solid wires are live
+                // (they feed the next send), dashed ones are history (fork
+                // lineage, derive provenance, researcher spawns). A fork still
+                // reads apart from a derive by its message-row anchor.
                 style: {
                   stroke: accent,
-                  strokeWidth: 3,
-                  ...(nodes.find((n) => n.id === e.target)?.data.kind === 'research'
-                    ? { strokeDasharray: '6 4' }
-                    : {})
+                  strokeWidth: 2,
+                  opacity: 0.6,
+                  strokeDasharray: '6 5'
                 },
                 focusable: false,
                 selectable: false

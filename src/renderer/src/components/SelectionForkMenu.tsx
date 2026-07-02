@@ -5,20 +5,20 @@ import { paletteFor } from '../lib/palette'
 
 // Highlight-to-fork. Selecting text inside any node body that opts in
 // (`.select-text` on chats/notes, `.pdf-text-layer` on PDFs) floats a little
-// fork button just above the selection. Tapping it forks-and-sends right away:
-// a chat source forks at its tip (the transcript carries the quoted passage as
-// context); a note/PDF source spawns a chat wired to read it. The new card
-// lands just right of the source and the seeded turn fires immediately.
+// fork button just above the selection. Tapping it forks: a chat source forks
+// at its tip; a note/PDF source spawns a chat wired to read it. The new card
+// lands just right of the source with the highlighted text seeded into its
+// focused composer — the user continues typing their ask from it and sends.
 //
 // Webview pages live in a separate guest document, so their selections never
 // reach this host listener — they need a guest→host bridge and are handled
 // separately.
 
-// The turn the new chat fires. Instruction first, then the passage, so the
-// model knows both the ask and exactly what "the highlighted section" is.
+// The composer seed: the bare passage, cursor right after it — the user
+// continues typing from the highlighted words. No quotes, no canned
+// instruction presuming what the ask is.
 function buildSeed(text: string): string {
-  const clean = text.replace(/\s+/g, ' ').trim().slice(0, 4000)
-  return `Concisely explain this highlighted section:\n\n"${clean}"`
+  return text.replace(/\s+/g, ' ').trim().slice(0, 4000)
 }
 
 interface Pending {
@@ -36,7 +36,7 @@ interface Pending {
 const FORKABLE_SEL = '.select-text, .pdf-text-layer'
 
 export default function SelectionForkMenu(): React.JSX.Element | null {
-  const forkAndSend = useCanvasStore((s) => s.forkAndSend)
+  const forkWithDraft = useCanvasStore((s) => s.forkWithDraft)
   const [pending, setPending] = useState<Pending | null>(null)
 
   // Recompute on every selection change. A collapsed/empty selection, or one
@@ -88,7 +88,7 @@ export default function SelectionForkMenu(): React.JSX.Element | null {
   if (!pending) return null
 
   const fork = (): void => {
-    forkAndSend(pending.nodeId, buildSeed(pending.text))
+    forkWithDraft(pending.nodeId, buildSeed(pending.text))
     setPending(null)
     window.getSelection()?.removeAllRanges()
   }

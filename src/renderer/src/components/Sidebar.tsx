@@ -67,7 +67,7 @@ export default function Sidebar(): React.JSX.Element | null {
         type="button"
         onClick={() => setCollapsed(false)}
         title="Show recent list"
-        className="flex cursor-pointer items-center gap-1.5 rounded-[6px] border border-black bg-white px-3.5 py-2 text-[12px] font-semibold text-black shadow-lg transition-colors hover:bg-neutral-100"
+        className="flex h-9 cursor-pointer items-center gap-1.5 rounded-[6px] border border-black bg-white px-3.5 text-[12px] font-semibold text-black shadow-lg transition-colors hover:bg-neutral-100"
       >
         <Plus className="h-3.5 w-3.5" />
         Recent

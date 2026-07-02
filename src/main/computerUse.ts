@@ -164,6 +164,17 @@ export function describeComputerAction(input: Record<string, unknown>): string {
   }
 }
 
+/** Rides every turn where computer use is NOT active: the model must relay
+ *  how to enable it instead of claiming it has no browser tool (or worse,
+ *  pretending to browse). Wording mirrors the renderer's toast. */
+export const COMPUTER_OFF_APPEND =
+  'COMPUTER USE — this app can let you drive a browser tab (clicks, typing, scrolling), ' +
+  'but it is OFF for this request, so never claim you browsed interactively. If the user ' +
+  'asks you to browse, click around, or control a page, tell them how to enable it: ' +
+  'drag the square connector on a browser tab onto the chat to wire them together, then ' +
+  'press the mouse-pointer icon in the composer and send again. If they only need ' +
+  'information from a page, answer from attached page content or WebFetch as normal.'
+
 /** The computer-use section of the turn's system prompt. */
 export function computerAppend(target: ComputerTarget): string {
   return (

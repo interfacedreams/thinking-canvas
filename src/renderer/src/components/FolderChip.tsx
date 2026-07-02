@@ -50,7 +50,7 @@ export default function FolderChip(): React.JSX.Element | null {
         type="button"
         onClick={() => (folder.current ? setOpen((o) => !o) : void handleChoose())}
         title={folder.current ?? 'Choose a folder'}
-        className="flex max-w-[280px] cursor-pointer items-center gap-2 rounded-[6px] border border-black bg-black px-3 py-1.5 text-[13px] font-medium text-white shadow-md transition-colors hover:bg-neutral-800"
+        className="flex h-9 max-w-[280px] cursor-pointer items-center gap-2 rounded-[6px] border border-black bg-black px-3 text-[13px] font-medium text-white shadow-md transition-colors hover:bg-neutral-800"
       >
         <Folder className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">{displayName}</span>

@@ -101,44 +101,17 @@ body {
     transform 120ms ease,
     box-shadow 120ms ease;
 }
-/* A chevron inside every connector. Inputs sit on top and point down (they
-   drop into the node below them); outputs sit on the right and point right (they
-   send into the node they feed). White on the palette-accent fill. */
-.ctx-handle.react-flow__handle::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='white'%20stroke-width='3'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M6%209l6%206%206-6'/%3E%3C/svg%3E")
-    center / 16px no-repeat;
-}
-.ctx-handle.react-flow__handle-right::after {
-  background: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='white'%20stroke-width='3'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M9%206l6%206-6%206'/%3E%3C/svg%3E")
-    center / 16px no-repeat;
-}
+/* Knobs are plain shapes — connections are undirected, so a chevron would
+   imply a direction that no longer exists. Pinned knobs still carry their
+   brain glyph as a child; the hover swell below is the "grab me" affordance. */
 /* Swell on hover / while a connection is over it. The translate must match
-   the side React Flow pinned the handle to: top (chats) vs bottom
-   (resources — notes, files, tabs). */
+   the side React Flow pinned the handle to (all knobs float top now). */
 .ctx-handle.react-flow__handle-top:hover,
 .ctx-handle.react-flow__handle-top.connectingfrom,
 .ctx-handle.react-flow__handle-top.connectingto,
 .ctx-handle.react-flow__handle-top.valid,
 .ctx-handle.react-flow__handle-top.ctx-armed {
   transform: translate(-50%, -50%) scale(1.25);
-}
-.ctx-handle.react-flow__handle-bottom:hover,
-.ctx-handle.react-flow__handle-bottom.connectingfrom,
-.ctx-handle.react-flow__handle-bottom.connectingto,
-.ctx-handle.react-flow__handle-bottom.valid,
-.ctx-handle.react-flow__handle-bottom.ctx-armed {
-  transform: translate(-50%, 50%) scale(1.25);
-}
-.ctx-handle.react-flow__handle-right:hover,
-.ctx-handle.react-flow__handle-right.connectingfrom,
-.ctx-handle.react-flow__handle-right.connectingto,
-.ctx-handle.react-flow__handle-right.valid,
-.ctx-handle.react-flow__handle-right.ctx-armed {
-  transform: translate(50%, -50%) scale(1.25);
 }
 .ctx-handle.react-flow__handle.valid {
   box-shadow: 0 0 0 5px rgba(146, 105, 11, 0.25);

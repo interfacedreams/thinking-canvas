@@ -7,7 +7,7 @@ import {
   useStoreApi,
   type NodeProps
 } from '@xyflow/react'
-import { Brain, Minus, Plus, Trash2, TriangleAlert } from 'lucide-react'
+import { Brain, GitFork, Minus, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type ChatNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -21,6 +21,7 @@ import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
   ctxHandleStyle,
+  ctxTargetStyle,
   DRAG_HEADER,
   HIDDEN_HANDLE,
   OUTPUT_HANDLE_ID
@@ -34,6 +35,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const forkChat = useCanvasStore((s) => s.forkChat)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   // While the transform composer is open, its tab covers the node's top; hide
   // the top connector so its circle doesn't poke out over the tab seam.
@@ -78,6 +80,9 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   // Researcher transcripts spawned by a research turn — display-only: they ran
   // inside the lead's session, so there's nothing to reply to (and no composer).
   const isResearch = data.kind === 'research'
+  // Forkable once there's a settled assistant reply to branch from (mirrors
+  // the overlay's old chatForkable rule — an in-flight reply has no uuid yet).
+  const forkable = data.messages.some((m) => m.role === 'assistant' && m.uuid)
 
   const palette = paletteFor(data.color)
 
@@ -151,10 +156,11 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
       {/* invisible anchors so fork edges have somewhere to attach */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the context connector: notes' and images' circles drop here.
-          Receive-only — a context arrow always starts at a note or image.
-          Research transcripts can't send, so context would never reach a
-          model; they get no circle. */}
+      {/* the connection knob — a stacked source/target pair at the top (see
+          nodeChrome): drag it onto any card (or tap, then click one) to
+          connect; other knobs drop onto it the same way. Tapping and clicking
+          empty canvas forks the chat there. Research transcripts are
+          display-only — no knob. */}
       {!isResearch && !transforming && (
         <Handle
           id={CTX_HANDLE_ID}
@@ -162,31 +168,45 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
           position={Position.Top}
           isConnectable
           isConnectableStart={false}
-          title="Drop a note's or image's circle here to attach it as context"
-          className="ctx-handle"
-          style={ctxHandleStyle(palette.accent)}
+          style={ctxTargetStyle()}
         />
       )}
-      {/* the output connector, doing double duty. Tap it (or drag), then: click
-          a note to let this chat read AND write it, or click empty canvas to
-          fork the chat there. On the right so the chat's output reads
-          left-to-right (context still comes in from the top). Research chats
-          can't edit or fork meaningfully, so they get no output port. */}
       {!isResearch && (
         <Handle
           id={OUTPUT_HANDLE_ID}
           type="source"
-          position={Position.Right}
+          position={Position.Top}
           isConnectable
           isConnectableEnd={false}
-          title="Tap to add a chat"
+          title="Drag — or tap, then click a card — to connect · click empty canvas for a new connected chat"
           onClick={(e) => {
             e.stopPropagation()
             setCtxConnectSource(armed ? null : id)
           }}
           className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
-          style={ctxHandleStyle(palette.accent, 'right', 'circle')}
+          style={ctxHandleStyle(palette.accent, 'top', 'circle')}
         />
+      )}
+      {/* fork knob, floating outside the right edge where the old output knob
+          sat — forks grow rightward, and fork wires already leave this edge
+          (anchored at the message they branch from). Dressed exactly like a
+          knob (solid accent, white ring), told apart by the fork glyph riding
+          inside — the same convention as the brain in a pinned knob. Click
+          forks; it never wires. Appears once there's a settled reply to
+          branch from. */}
+      {!isResearch && !data.minimized && !transforming && forkable && (
+        <button
+          type="button"
+          onClick={() => forkChat(id)}
+          title="Fork — branch a new chat from the last reply"
+          className="nodrag absolute top-1/2 z-10 flex cursor-pointer items-center justify-center transition-transform hover:scale-110 active:scale-95"
+          style={{
+            ...ctxHandleStyle(palette.accent, 'right', 'circle'),
+            transform: 'translate(50%, -50%)'
+          }}
+        >
+          <GitFork className="pointer-events-none h-4 w-4 text-white" />
+        </button>
       )}
 
       {!data.minimized && (

@@ -20,6 +20,8 @@ import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
   ctxHandleStyle,
+  ctxTargetStyle,
+  OUTPUT_HANDLE_ID,
   DRAG_HEADER,
   HIDDEN_HANDLE
 } from '../lib/nodeChrome'
@@ -92,20 +94,28 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
       {/* hidden layout anchors (left/right) for any future edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the context connector: drag this square onto a chat's circle — or
-          tap it and the arrow follows the cursor until a click on a chat
-          commits (ContextConnectOverlay) — to let that chat see this file.
-          A square because, like a note, this is a resource. */}
+      {/* the connection knob — a stacked source/target pair at the top (see
+          nodeChrome): drag it onto a chat (or tap, then click one) to let
+          that chat see this file. A square because, like a note, this is a
+          resource. */}
       <Handle
         id={CTX_HANDLE_ID}
+        type="target"
+        position={Position.Top}
+        isConnectable
+        isConnectableStart={false}
+        style={ctxTargetStyle()}
+      />
+      <Handle
+        id={OUTPUT_HANDLE_ID}
         type="source"
-        position={Position.Right}
+        position={Position.Top}
         isConnectable
         isConnectableEnd={false}
         title={
           data.pinned
             ? 'In memory — the agent pulls this in on demand. Drag to also wire it into a chat.'
-            : 'Drag — or tap, then click a chat — to attach this file as context'
+            : 'Drag — or tap, then click a chat — to connect this file'
         }
         onClick={(e) => {
           // keep the tap from reaching the overlay's window listener,
@@ -115,7 +125,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{
-          ...ctxHandleStyle(palette.accent, 'right', 'square'),
+          ...ctxHandleStyle(palette.accent, 'top', 'square'),
           // In memory: a white brain rides inside the knob (mirrors notes and
           // the header toggle's active state), slightly faded to read as
           // "optional — already in memory".
@@ -123,7 +133,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
             ? {
                 width: 36,
                 height: 36,
-                right: -24,
+                top: -24,
                 opacity: 0.85,
                 display: 'flex',
                 alignItems: 'center',

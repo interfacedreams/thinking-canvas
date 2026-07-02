@@ -22,7 +22,7 @@ export default function EffortSelector(): React.JSX.Element {
         type="button"
         onClick={() => setOpen((o) => !o)}
         title={`Thinking: ${current.label}`}
-        className="flex cursor-pointer items-center justify-center rounded-[6px] border border-black bg-white px-2.5 py-1.5 text-[13px] font-medium text-black shadow-md transition-colors hover:bg-neutral-100"
+        className="flex h-9 cursor-pointer items-center justify-center rounded-[6px] border border-black bg-white px-2.5 text-[13px] font-medium text-black shadow-md transition-colors hover:bg-neutral-100"
       >
         <span aria-hidden>{current.emoji}</span>
       </button>

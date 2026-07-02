@@ -20,9 +20,10 @@ import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
   ctxHandleStyle,
+  ctxTargetStyle,
   DRAG_HEADER,
   HIDDEN_HANDLE,
-  INPUT_HANDLE_ID
+  OUTPUT_HANDLE_ID
 } from '../lib/nodeChrome'
 import { useTitleGuard } from '../lib/titleGuard'
 import TitleEditSlot from './TitleEditSlot'
@@ -158,30 +159,24 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
       {/* hidden layout anchors (left/right) kept for any id-less edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the input connector: a chat's bottom circle drops here to gain
-          read+write access to this note. Receive-only — the arrow always
-          starts at the chat. */}
+      {/* the connection knob — a stacked source/target pair at the top (see
+          nodeChrome): drag it onto a chat (or tap, then click one) to connect
+          this note; a chat's knob drops here the same way. A connected note is
+          read every send and edited only when the user asks. */}
       {!transforming && (
         <Handle
-          id={INPUT_HANDLE_ID}
+          id={CTX_HANDLE_ID}
           type="target"
           position={Position.Top}
           isConnectable
           isConnectableStart={false}
-          title="Drop a chat's circle here to let it write this note"
-          className="ctx-handle"
-          style={ctxHandleStyle(palette.accent, 'top', 'square')}
+          style={ctxTargetStyle()}
         />
       )}
-      {/* the context connector: drag this square onto a chat's circle — or
-          tap it and the arrow follows the cursor until a click on a chat
-          commits (ContextConnectOverlay) — to feed the note into that chat's
-          system prompt. Output sits on the right so derivation reads
-          left-to-right (context still comes in from the top). */}
       <Handle
-        id={CTX_HANDLE_ID}
+        id={OUTPUT_HANDLE_ID}
         type="source"
-        position={Position.Right}
+        position={Position.Top}
         isConnectable
         isConnectableEnd={false}
         title={
@@ -189,7 +184,7 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
             ? 'Always in project memory — every chat sees CLAUDE.md in full. Drag to also wire it into a chat.'
             : data.pinned
               ? 'In memory — the agent pulls this in on demand. Drag to also wire its full text into a chat.'
-              : 'Drag — or tap, then click a chat — to attach this note as context'
+              : 'Drag — or tap, then click a chat — to connect this note'
         }
         onClick={(e) => {
           // keep the tap from reaching the overlay's window listener,
@@ -199,7 +194,7 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{
-          ...ctxHandleStyle(palette.accent, 'right', 'square'),
+          ...ctxHandleStyle(palette.accent, 'top', 'square'),
           // In memory: a white brain rides inside the knob (mirrors the header
           // toggle's active state). Slightly larger so the glyph stays legible,
           // slightly faded so the knob reads as "optional — already in memory".
@@ -207,7 +202,7 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
             ? {
                 width: 36,
                 height: 36,
-                right: -24,
+                top: -24,
                 opacity: 0.85,
                 display: 'flex',
                 alignItems: 'center',

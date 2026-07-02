@@ -154,8 +154,12 @@ const ChatBody = forwardRef<
       const el = textareaRef.current
       if (!el) return
       el.focus()
-      if (document.activeElement === el) clearFocusDraft(id)
-      else raf = requestAnimationFrame(tryFocus)
+      if (document.activeElement === el) {
+        // A seeded draft (highlight-to-fork seeds the passage) wants the
+        // caret right after it, not at position 0.
+        el.setSelectionRange(el.value.length, el.value.length)
+        clearFocusDraft(id)
+      } else raf = requestAnimationFrame(tryFocus)
     }
     tryFocus()
     return () => cancelAnimationFrame(raf)

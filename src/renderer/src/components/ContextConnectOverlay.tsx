@@ -24,39 +24,31 @@ const SPAWN_KEYS: Record<string, 'chat' | 'note' | 'file' | 'link' | 'label'> = 
 // near the card's top — mirrors PlacementOverlay's ANCHOR_Y.
 const DROP_ANCHOR_Y = 24
 
-// Click-to-connect: once a source's right circle is tapped (ctxConnectSource
-// in the store), this overlay draws a faded arrow from that circle to the
-// cursor. Landing on a valid target snaps the arrow onto its top port — where
-// it stays, pulsing, until the cursor strays — and a click commits. Any other
-// click, or Escape, cancels. Two flavours share this geometry (source right →
-// target top): a resource (note/file/link) → chat context edge, and a chat →
-// note output edge. The source's kind picks which targets are valid.
+// Click-to-connect: once a node's knob is tapped (ctxConnectSource in the
+// store), this overlay draws a faded arrow from that knob to the cursor.
+// Landing on a valid target snaps the arrow onto its knob — where it stays,
+// pulsing, until the cursor strays — and a click commits one undirected
+// connection. Clicking empty canvas drops a fresh chat there, already
+// connected. Any other click, or Escape, cancels.
 
-// Sources: a resource feeds a chat; a chat feeds a note.
+// Sources: any connectable card (research chats are display-only).
 const isCtxSource = (n: CanvasNode): boolean =>
   isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research')
 
-// A chat source can also fork onto empty canvas — but only once it has a tip
-// (a completed assistant reply) to branch from. A mid-stream chat still
-// qualifies: it forks from its last settled reply (the in-flight one has no
-// uuid yet), so you can branch without waiting for the response to finish.
-const chatForkable = (n: CanvasNode): boolean =>
-  isChat(n) && n.data.messages.some((m) => m.role === 'assistant' && m.uuid)
-
-// Given the armed source, is `n` a valid drop target? A chat source feeds a
-// note (output) or another chat (its transcript as context); any other source
-// feeds chats. Research chats never take context, so they're never a target.
+// Given the armed source, is `n` a valid drop target? Connections are
+// undirected, so the only rule is the store's: the pair must include at least
+// one non-research chat. A chat source lands on any card; a resource source
+// lands on chats. Research chats are display-only — never a target.
 const isCtxTarget = (source: CanvasNode, n: CanvasNode): boolean =>
   isChat(source)
-    ? isNote(n) || (isChat(n) && n.id !== source.id && n.data.kind !== 'research')
+    ? n.id !== source.id &&
+      (isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research'))
     : isChat(n) && n.data.kind !== 'research'
 
-// Circle geometry mirrors ctxHandleStyle: a target's input sits 15px above the
-// top edge; a source's output sits 19px past the right edge. Radius 12 — the
-// pending arrow runs from the source circle's right to the target circle's top
-// like a committed edge.
+// Knob geometry mirrors ctxHandleStyle: every node's knob floats centered
+// above its top edge — the pending arrow runs knob to knob like a committed
+// connection.
 const CIRCLE_OFFSET = 21
-const SOURCE_OFFSET = 21
 const CIRCLE_R = 16
 // Snap radius is SCREEN px (divided by zoom before hit-testing) so the
 // reach feels the same at every zoom level. The snap zone is a tight halo
@@ -67,7 +59,7 @@ const SNAP_RADIUS = 20
 const nodeCx = (n: CanvasNode): number =>
   n.position.x + (n.width ?? n.measured?.width ?? NODE_W) / 2
 
-// chats: circle above the top edge — the pending arrow lands on its top
+// the knob above the top edge — the pending arrow lands on (and leaves from) it
 const chatCircleCenter = (n: CanvasNode): { x: number; y: number } => ({
   x: nodeCx(n),
   y: n.position.y - CIRCLE_OFFSET
@@ -79,12 +71,6 @@ const chatCircleTop = (n: CanvasNode): { x: number; y: number } => ({
   y: n.position.y - CIRCLE_OFFSET - CIRCLE_R - 3
 })
 
-// sources: circle past the right edge — the arrow leaves from its right side
-const sourceCircleRight = (n: CanvasNode): { x: number; y: number } => ({
-  x: n.position.x + (n.width ?? n.measured?.width ?? NODE_W) + SOURCE_OFFSET + CIRCLE_R,
-  y: n.position.y + (n.height ?? n.measured?.height ?? 0) / 2
-})
-
 function hits(n: CanvasNode, p: { x: number; y: number }, radius: number): boolean {
   const c = chatCircleCenter(n)
   if (Math.hypot(p.x - c.x, p.y - c.y) <= radius) return true
@@ -94,20 +80,15 @@ function hits(n: CanvasNode, p: { x: number; y: number }, radius: number): boole
   const w = n.width ?? n.measured?.width ?? NODE_W
   const h = n.height ?? n.measured?.height ?? 0
   return (
-    p.x >= n.position.x &&
-    p.x <= n.position.x + w &&
-    p.y >= n.position.y &&
-    p.y <= n.position.y + h
+    p.x >= n.position.x && p.x <= n.position.x + w && p.y >= n.position.y && p.y <= n.position.y + h
   )
 }
 
 function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | null {
   const { screenToFlowPosition, getZoom, setCenter } = useReactFlow()
   const addContextEdge = useCanvasStore((s) => s.addContextEdge)
-  const addOutputEdge = useCanvasStore((s) => s.addOutputEdge)
   const addNodeAt = useCanvasStore((s) => s.addNodeAt)
   const addNoteAt = useCanvasStore((s) => s.addNoteAt)
-  const forkChat = useCanvasStore((s) => s.forkChat)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
   const spawn = useSpawn()
   const sourceNode = useCanvasStore((s) => s.nodes.find((n) => n.id === sourceId))
@@ -176,36 +157,25 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
       const onPane = (e.target as HTMLElement)?.classList?.contains('react-flow__pane')
       if (snapRef.current) {
-        // Snapped onto a target. A chat source drives a note (output edge) but
-        // feeds another chat as context; a resource source always commits a
-        // context edge.
-        const tgt = useCanvasStore.getState().nodes.find((n) => n.id === snapRef.current)
-        if (src && isChat(src) && tgt && isNote(tgt)) addOutputEdge(sourceId, snapRef.current)
-        else addContextEdge(sourceId, snapRef.current)
+        // Snapped onto a target — commit the connection (undirected; the
+        // store validates the pair).
+        addContextEdge(sourceId, snapRef.current)
       } else if (src && onPane) {
-        // No target, click on empty canvas. A chat forks at the drop point; a
-        // resource drops a fresh chat there, wired to it as context (the click
-        // equivalent of pressing C while armed). forkChat no-ops on an un-run
-        // chat, which then just disarms.
+        // No target, click on empty canvas: drop a fresh chat there, already
+        // connected to the source (the click equivalent of pressing C while
+        // armed). Same behavior for every source kind — a chat source shares
+        // its transcript with the newborn, a resource feeds it as context.
+        // Forking is the header's GitFork chip, not a knob gesture: the knob
+        // always delivers a knob-to-knob connection.
         const p = screenToFlowPosition({ x: e.clientX, y: e.clientY })
-        let placed: CanvasNode | null = null
-        if (isChat(src)) {
-          const forkId = forkChat(sourceId, { x: p.x, y: p.y })
-          placed = forkId
-            ? (useCanvasStore.getState().nodes.find((n) => n.id === forkId) ?? null)
-            : null
-        } else if (isNote(src) || isFile(src) || isLink(src)) {
-          const node = addNodeAt({ x: p.x - NODE_W / 2, y: p.y - DROP_ANCHOR_Y })
-          addContextEdge(sourceId, node.id)
-          placed = node
-        }
+        const node = addNodeAt({ x: p.x - NODE_W / 2, y: p.y - DROP_ANCHOR_Y })
+        addContextEdge(sourceId, node.id)
         // Glide to center on the newborn node — same framing as placing with C
         // (PlacementOverlay): center on the node's own position, not the cursor.
-        if (placed)
-          void setCenter(placed.position.x + NODE_W / 2, placed.position.y + 150, {
-            zoom: Math.max(getZoom(), 1),
-            duration: 250
-          })
+        void setCenter(node.position.x + NODE_W / 2, node.position.y + 150, {
+          zoom: Math.max(getZoom(), 1),
+          duration: 250
+        })
       }
       setCtxConnectSource(null)
     }
@@ -222,23 +192,19 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
       e.preventDefault()
       const src = useCanvasStore.getState().nodes.find((n) => n.id === sourceId)
       const p = cursorRef.current
-      // Drop the new node wired to the source when the pair is a valid edge and
-      // needs no picker: a chat forks a chat or drives a note; a resource feeds
-      // a chat as context. Anything else (file/link/label, or no cursor yet)
-      // can't be wired here — fall back to the normal armed-placement spawn.
+      // Drop the new node wired to the source when the pair is a valid
+      // connection (needs at least one chat in the pair): C drops a connected
+      // chat from any source; N drops a connected note from a chat source.
+      // Anything else (file/link/label, or no cursor yet) can't be wired
+      // here — fall back to the normal armed-placement spawn.
       if (src && p) {
         const pos = { x: p.x - NODE_W / 2, y: p.y - DROP_ANCHOR_Y }
-        if (isChat(src) && kind === 'chat') {
-          // forkChat no-ops without a tip; a plain chat still drops, just unwired
-          if (!forkChat(sourceId, pos)) addNodeAt(pos)
+        if (kind === 'chat') {
+          addContextEdge(sourceId, addNodeAt(pos).id)
           return setCtxConnectSource(null)
         }
         if (isChat(src) && kind === 'note') {
-          addOutputEdge(sourceId, addNoteAt(pos).id)
-          return setCtxConnectSource(null)
-        }
-        if (!isChat(src) && kind === 'chat') {
-          addContextEdge(sourceId, addNodeAt(pos).id)
+          addContextEdge(sourceId, addNoteAt(pos).id)
           return setCtxConnectSource(null)
         }
       }
@@ -253,10 +219,8 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
     }
   }, [
     addContextEdge,
-    addOutputEdge,
     addNodeAt,
     addNoteAt,
-    forkChat,
     spawn,
     screenToFlowPosition,
     setCenter,
@@ -271,24 +235,19 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
   if (!t) return null // no cursor fix yet — nothing to draw
 
   const accent = paletteFor(sourceNode.data.color).accent
-  const s = sourceCircleRight(sourceNode)
-  // A forkable chat, not yet aimed at a note, can drop a fork on empty canvas —
-  // ping rings on its knob advertise that the next canvas click does something.
-  const canFork = isChat(sourceNode) && chatForkable(sourceNode)
+  const s = chatCircleCenter(sourceNode) // every knob floats top-center now
   // The cursor pill spells out what a click will do at this moment. Resource
   // sources (note/file/link) stay silent — clicking empty space to drop a chat
   // or another chat to connect is left for the user to discover; C still works.
   const hint = snapped
     ? 'Click to connect'
     : isChat(sourceNode)
-      ? canFork
-        ? 'Click empty space to fork · a note or chat to connect · C / N to drop one'
-        : 'Click a note or chat to connect · C / N to drop one'
+      ? 'Click a card to connect · empty space for a connected chat · C / N to drop one'
       : null
   const [path] = getBezierPath({
     sourceX: s.x,
     sourceY: s.y,
-    sourcePosition: Position.Right,
+    sourcePosition: Position.Top,
     targetX: t.x,
     targetY: t.y,
     targetPosition: Position.Top

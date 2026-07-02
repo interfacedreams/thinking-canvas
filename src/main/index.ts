@@ -22,7 +22,12 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
 import { initAutoUpdater } from './updater'
-import { computerAppend, createComputerServer, describeComputerAction } from './computerUse'
+import {
+  COMPUTER_OFF_APPEND,
+  computerAppend,
+  createComputerServer,
+  describeComputerAction
+} from './computerUse'
 import {
   BROWSE_PARTITION,
   DEFAULT_EFFORT,
@@ -1567,7 +1572,9 @@ function registerThreadIpc(): void {
             ? 'The user attached notes to this conversation. Their full, current contents ' +
               'are below, refreshed on every message — this IS the live content of the ' +
               'named files, so never search the project, check memory, or read these files ' +
-              'from disk to find this information. Just answer from what is here.\n\n' +
+              'from disk to find this information. Just answer from what is here. Treat ' +
+              'these notes as read-only reference: only edit a note’s file when the user ' +
+              'directly asks you to change that note (its file path is on its block).\n\n' +
               contextNotes
                 .map((n) => {
                   const file = noteFiles.get(n.id)
@@ -1696,7 +1703,8 @@ function registerThreadIpc(): void {
           linksAppend,
           memoryAppend,
           research ? RESEARCH_APPEND : '',
-          computerTarget ? computerAppend(computerTarget) : ''
+          // Off-state guidance skips note-editing turns — they never browse.
+          computerTarget ? computerAppend(computerTarget) : notePath ? '' : COMPUTER_OFF_APPEND
         ]
           .filter(Boolean)
           .join('\n\n')

@@ -154,6 +154,10 @@ export interface LinkData {
   title: string
   color?: string
   url?: string // empty until the user commits one — the body shows the URL input
+  // Runtime-only: a computer-use turn is driving this tab right now — the card
+  // shows a "Claude is browsing" badge and its drive wire animates. Set on the
+  // turn's first computer action, cleared when the turn settles.
+  driven?: boolean
   pinned?: boolean // in memory: its page is clipped to .canvas/clips/<id>.md
   description?: string // 1-3 sentence index blurb of the clipped page (cached)
   minimized: boolean
@@ -522,9 +526,10 @@ interface CanvasState {
   // (click-to-place from the output knob); without it, findForkSpot picks a slot.
   forkChat: (nodeId: string, at?: { x: number; y: number }) => string | null
   // Highlight-to-fork: spawn a chat from `sourceId` (a chat forks; a note/file/
-  // link spawns a chat wired as context), auto-placed to the right, then send
-  // `prompt` immediately. Returns the new chat's id, or null if nothing spawned.
-  forkAndSend: (sourceId: string, prompt: string) => string | null
+  // link spawns a chat wired as context), auto-placed to the right, with `draft`
+  // seeded into its composer — focused and waiting, nothing sent. Returns the
+  // new chat's id, or null if nothing spawned.
+  forkWithDraft: (sourceId: string, draft: string) => string | null
   // Derive a fresh note from any node + an instruction: spawn a note to the
   // right wired back by a 'derive' edge, then run an editing turn grounded in
   // the source (a chat forks its session; a note/file/link rides as context).
@@ -533,6 +538,8 @@ interface CanvasState {
   deriveNote: (sourceId: string, instruction: string, inPlace?: boolean) => Promise<string | null>
   // Context edges: a note, file, or link feeding a chat's system prompt
   // (note/file/link → chat only).
+  // THE connection creator — undirected; argument order only records how the
+  // wire was drawn. Valid pairs include at least one non-research chat.
   addContextEdge: (sourceId: string, chatId: string) => void
   removeContextEdge: (edgeId: string) => void
   // Spawn a chat wired to read a note/file/link. With `center` (a flow-space
@@ -542,7 +549,6 @@ interface CanvasState {
   // or null if the source isn't a connectable resource.
   chatAbout: (sourceId: string, center?: { x: number; y: number }) => string | null
   // Wire a chat → note so the chat can read AND write that note.
-  addOutputEdge: (chatId: string, noteId: string) => void
   discardNode: (id: string) => void
   toggleMinimize: (id: string) => void
   load: () => Promise<Viewport | null>
@@ -584,6 +590,10 @@ const researchChildren = new Map<string, { parentId: string; msgId: string }>()
 // Marked injected only when the turn lands ok — a failed turn re-sends them
 // on retry.
 const pendingFileInjections = new Map<string, string[]>()
+// Tab being driven by an in-flight computer-use turn, per chat node — set on
+// the turn's first computer action, cleared (and the tab's `driven` badge
+// dropped) when the turn settles. Mid-turn only, so it lives outside the store.
+const drivenTabs = new Map<string, string>()
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   const patchData = (id: string, patch: Record<string, unknown>): void => {
@@ -745,18 +755,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       .join('\n\n')
   }
 
-  // Notes wired to a chat by context edges go along with every send — read
-  // from the store, which always holds the freshest content (autosave
-  // debounce notwithstanding).
+  // Connections are UNDIRECTED: an attachment edge means "these two are
+  // connected" — which end is source/target is just how the wire happened to
+  // be drawn. What a connection does comes from the node kinds (a note shares
+  // its text, a tab its page, a chat its transcript), toggles (the pointer
+  // icon arms driving a connected tab), and asking (a connected note is
+  // edited only on request). Legacy 'output' edges count as plain connections.
+  const isAttachment = (e: PersistedEdge): boolean => e.kind === 'context' || e.kind === 'output'
+  const peersOf = (id: string): CanvasNode[] =>
+    get().edges.flatMap((e) => {
+      if (!isAttachment(e)) return []
+      const peerId = e.source === id ? e.target : e.target === id ? e.source : null
+      if (!peerId) return []
+      const n = get().nodes.find((x) => x.id === peerId)
+      return n ? [n] : []
+    })
+
+  // Notes connected to a chat go along with every send — read from the store,
+  // which always holds the freshest content (autosave debounce notwithstanding).
   const contextNotesFor = (id: string): { id: string; title: string; content: string }[] =>
-    get()
-      .edges.filter((e) => e.kind === 'context' && e.target === id)
-      .flatMap((e) => {
-        const src = get().nodes.find((n) => n.id === e.source)
-        return src && isNote(src)
-          ? [{ id: src.id, title: src.data.title || 'Untitled note', content: src.data.content }]
-          : []
-      })
+    peersOf(id)
+      .filter(isNote)
+      .map((n) => ({ id: n.id, title: n.data.title || 'Untitled note', content: n.data.content }))
 
   // The chats whose transcripts `id` already carries because its session forks
   // from them: the direct fork-parent chain (fork of a fork resumes the whole
@@ -777,20 +797,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     return out
   }
 
-  // Every chat upstream of `id`, oldest → newest, cycle-safe — the shared basis
-  // for transcript blocks (contextChatsFor) and the documents those chats carry
-  // (gathered in dispatchTurn). Upstream means, transitively:
-  //  • context-edge sources (A → B → C: C reaches B *and* A),
-  //  • fork parents — including id's OWN fork parent. A fork inherits the
-  //    parent's transcript via session resume, but NOT the parent's attached
-  //    documents (those ride the system prompt, rebuilt from the child's own
-  //    edges), so the parent must be walked to gather them. contextChatsFor
-  //    then drops the fork lineage's transcripts to avoid duplicating the
-  //    resumed session; documents from every upstream chat are kept.
-  // A fork parent rides with `clipAt` set to the branch anchor (a true fork: the
-  // parent's post-branch turns are excluded). A visited set (seeded with `id`)
-  // breaks cycles and never returns the target itself; first visit wins, and
-  // ancestry is walked before context sources, so a fork parent stays clipped.
+  // The chats whose transcripts/documents ride `id`'s sends, oldest → newest —
+  // the shared basis for transcript blocks (contextChatsFor) and the documents
+  // those chats carry (gathered in dispatchTurn). Two sources, deliberately
+  // different depths:
+  //  • Fork ancestry, walked to the ROOT: the session resumes those
+  //    transcripts, but their attached documents ride the system prompt
+  //    (rebuilt per-send from each chat's own connections), so every ancestor
+  //    must be gathered. Each arrives with `clipAt` set to its branch anchor
+  //    (a true fork: post-branch turns excluded); contextChatsFor drops the
+  //    lineage's transcripts since the resumed session already holds them.
+  //  • Connected chats, ONE hop only — direct connections of the sender or of
+  //    a fork ancestor. A connected chat brings its transcript and its own
+  //    directly-attached resources, never its further neighborhood: with
+  //    undirected connections, wiring two working chats together must not
+  //    silently haul in each other's entire canvas ("direct context only").
   const upstreamChats = (id: string): { chat: ChatNode; clipAt?: string }[] => {
     const nodes = get().nodes
     const edges = get().edges
@@ -798,28 +819,37 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const n = nodes.find((x) => x.id === nid)
       return n && isChat(n) ? n : null
     }
-    const ctxSourcesOf = (chatId: string): ChatNode[] =>
+    // Connected chats, either end of the wire — connections are undirected.
+    const connectedChatsOf = (chatId: string): ChatNode[] =>
       edges
-        .filter((e) => e.kind === 'context' && e.target === chatId)
-        .map((e) => chatById(e.source))
-        .filter((n): n is ChatNode => n !== null)
+        .filter((e) => e.kind === 'context' || e.kind === 'output')
+        .flatMap((e) => {
+          const peerId = e.source === chatId ? e.target : e.target === chatId ? e.source : null
+          const n = peerId ? chatById(peerId) : null
+          return n ? [n] : []
+        })
     const seen = new Set<string>([id])
-    const out: { chat: ChatNode; clipAt?: string }[] = []
-    const visit = (chat: ChatNode, clipAt?: string): void => {
-      if (seen.has(chat.id)) return
-      seen.add(chat.id)
-      const forkEdge = edges.find((x) => x.target === chat.id && x.sourceMessageId)
+    // Own fork ancestry, nearest parent first (cycle-safe by `seen`).
+    const ancestry: { chat: ChatNode; clipAt?: string }[] = []
+    let curId = id
+    for (;;) {
+      const forkEdge = edges.find((x) => x.target === curId && x.sourceMessageId)
       const parent = forkEdge ? chatById(forkEdge.source) : null
-      if (parent) visit(parent, forkEdge?.sourceMessageId)
-      ctxSourcesOf(chat.id).forEach((c) => visit(c))
-      out.push({ chat, clipAt })
+      if (!parent || seen.has(parent.id)) break
+      seen.add(parent.id)
+      ancestry.push({ chat: parent, clipAt: forkEdge?.sourceMessageId })
+      curId = parent.id
     }
-    // id's own fork parent is walked too (for its documents); ctxSources after,
-    // so context-connected ancestry reads after the fork lineage.
-    const ownFork = edges.find((x) => x.target === id && x.sourceMessageId)
-    const ownParent = ownFork ? chatById(ownFork.source) : null
-    if (ownParent) visit(ownParent, ownFork?.sourceMessageId)
-    ctxSourcesOf(id).forEach((c) => visit(c))
+    // Oldest ancestor first, so transcript blocks read in conversation order.
+    const out: { chat: ChatNode; clipAt?: string }[] = [...ancestry].reverse()
+    // One hop of connections from the sender and each fork ancestor.
+    for (const baseId of [id, ...ancestry.map((a) => a.chat.id)]) {
+      for (const c of connectedChatsOf(baseId)) {
+        if (seen.has(c.id)) continue
+        seen.add(c.id)
+        out.push({ chat: c })
+      }
+    }
     return out
   }
 
@@ -836,64 +866,50 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     })
   }
 
-  // Notes this chat may write, wired by output edges (chat → note). Their
-  // content rides the system prompt like contextNotes; main also permits and
-  // mirrors edits to their files.
-  const outputNotesFor = (id: string): { id: string; title: string; content: string }[] =>
-    get()
-      .edges.filter((e) => e.kind === 'output' && e.source === id)
-      .flatMap((e) => {
-        const tgt = get().nodes.find((n) => n.id === e.target)
-        return tgt && isNote(tgt)
-          ? [{ id: tgt.id, title: tgt.data.title || 'Untitled note', content: tgt.data.content }]
-          : []
-      })
-
-  // Files wired to a chat go along as paths; main injects the bytes of any
+  // Files connected to a chat go along as paths; main injects the bytes of any
   // the session hasn't seen (isNew, stamped by send/retry) into the turn's
   // user message. A file whose attach hasn't landed yet (no path) sits out.
   const contextFilesFor = (id: string): ContextFile[] =>
-    get()
-      .edges.filter((e) => e.kind === 'context' && e.target === id)
-      .flatMap((e) => {
-        const src = get().nodes.find((n) => n.id === e.source)
-        return src && isFile(src) && src.data.file
+    peersOf(id)
+      .filter(isFile)
+      .flatMap((n) =>
+        n.data.file
           ? [
               {
-                id: src.id,
-                title:
-                  src.data.title || (src.data.kind === 'pdf' ? 'Untitled PDF' : 'Untitled image'),
-                file: src.data.file
+                id: n.id,
+                title: n.data.title || (n.data.kind === 'pdf' ? 'Untitled PDF' : 'Untitled image'),
+                file: n.data.file
               }
             ]
           : []
-      })
+      )
 
-  // Links wired to a chat: each send reads the tab's rendered page out of its
-  // live <webview> guest as markdown — what the user sees is what the model
-  // gets, so bot walls and JS-only pages that defeat a plain fetch don't
+  // Links connected to a chat: each send reads the tab's rendered page out of
+  // its live <webview> guest as markdown — what the user sees is what the
+  // model gets, so bot walls and JS-only pages that defeat a plain fetch don't
   // matter. A link whose guest can't be read (tab minimized, page hung) goes
   // along as a bare URL and main falls back to the WebFetch instruction.
   // A link whose URL hasn't been committed yet sits out.
   const contextLinksFor = (id: string): ContextLink[] =>
-    get()
-      .edges.filter((e) => e.kind === 'context' && e.target === id)
-      .flatMap((e) => {
-        const src = get().nodes.find((n) => n.id === e.source)
-        return src && isLink(src) && src.data.url
+    peersOf(id)
+      .filter(isLink)
+      .flatMap((n) =>
+        n.data.url
           ? [
               {
-                id: src.id,
-                title: src.data.title || hostTitle(src.data.url) || 'Untitled link',
-                url: src.data.url
+                id: n.id,
+                title: n.data.title || hostTitle(n.data.url) || 'Untitled link',
+                url: n.data.url
               }
             ]
           : []
-      })
+      )
 
-  // The tab a computer-use turn drives: the first wired link (direct wires
-  // first, then upstream chats') whose <webview> guest is alive right now.
-  // A minimized tab has no guest and sits out, same as page extraction.
+  // The tab a computer-use turn drives: the first wired tab (direct wires
+  // first, then upstream chats') whose <webview> guest is alive right now —
+  // a minimized tab has no guest and sits out, same as page extraction.
+  // One rule everywhere: resources wire INTO chats; the wire picks which tab,
+  // and the pointer toggle is the one consent gate that grants driving.
   const computerTargetFor = (id: string): ComputerTarget | null => {
     const links = [
       ...contextLinksFor(id),
@@ -934,6 +950,56 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     persist()
   }
 
+  // A computer-armed send with no wired live tab spawns its own: a Google tab
+  // just left of the chat, born at the desktop viewport (so no grow pass) and
+  // wired as context like a hand-drawn connection. The turn dispatches once
+  // the tab's <webview> guest attaches — see awaitComputerTab.
+  const COMPUTER_HOME = 'https://www.google.com'
+  const spawnComputerTab = (chat: ChatNode): string => {
+    const p = boxOf(chat)
+    const node = makeLinkNode(
+      { x: p.x - GAP - COMPUTER_TAB.width, y: p.y },
+      {
+        color: nextColor(),
+        updatedAt: Date.now(),
+        url: COMPUTER_HOME,
+        title: hostTitle(COMPUTER_HOME)
+      }
+    )
+    node.width = COMPUTER_TAB.width
+    node.height = COMPUTER_TAB.height
+    // One set for node + wire, spawned unselected (same reasons as deriveNote).
+    set((s) => ({
+      nodes: [...s.nodes, node],
+      edges: [...s.edges, { id: uid(), source: node.id, target: chat.id, kind: 'context' as const }]
+    }))
+    persist()
+    return node.id
+  }
+
+  // The fresh tab's guest attaches a few frames after the node mounts (webview
+  // mount, attach, first load). Poll briefly; null past the deadline — the
+  // turn then runs tabless and the model says so, same as a retry whose tab
+  // died.
+  const GUEST_ATTACH_MS = 10_000
+  const awaitComputerTab = async (tabId: string): Promise<ComputerTarget | null> => {
+    const deadline = Date.now() + GUEST_ATTACH_MS
+    while (Date.now() < deadline) {
+      const webContentsId = guestWebContentsId(tabId)
+      const node = get().nodes.find((n) => n.id === tabId)
+      if (webContentsId !== null && node && isLink(node) && node.data.url) {
+        return {
+          targetId: tabId,
+          webContentsId,
+          title: node.data.title || hostTitle(node.data.url) || 'Untitled link',
+          url: node.data.url
+        }
+      }
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    return null
+  }
+
   const withPageContent = (links: ContextLink[]): Promise<ContextLink[]> =>
     Promise.all(
       links.map(async (l) => {
@@ -960,19 +1026,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         return true
       })
     }
-    // Context flows up the whole tree. A document wired into an upstream chat
-    // rides this turn directly — not relied on to have soaked into that chat's
-    // transcript (it never does: a note lives in the system prompt, not the
-    // messages, and an unsent edit wouldn't be there at all). So a note added to
-    // a source chat reaches here even if that chat never re-ran with it. Deduped
-    // by node id, since the same document can hang off several chats in the tree.
+    // Context is direct-only, one hop through chats: upstreamChats yields the
+    // fork ancestry plus directly-connected chats, and each contributes the
+    // documents on its OWN connections — not relied on to have soaked into
+    // that chat's transcript (they never do: a note lives in the system
+    // prompt, not the messages, and an unsent edit wouldn't be there at all).
+    // Nothing is gathered beyond that hop. Deduped by node id, since the same
+    // document can hang off several of these chats.
     const upstreamIds = upstreamChats(id).map((c) => c.chat.id)
     const contextNotes = dedupeById([
       ...contextNotesFor(id),
       ...upstreamIds.flatMap(contextNotesFor),
       ...contextChatsFor(id) // upstream chats themselves, as transcript blocks
     ])
-    const outputNotes = outputNotesFor(id)
     // Only files the session hasn't seen carry bytes this turn; remember them so
     // a successful turn marks them injected (a failed turn re-sends on retry).
     const injected = new Set(node.data.injectedImages ?? [])
@@ -1002,8 +1068,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         ...(opts?.computer ? { computer: opts.computer } : {}),
         ...(contextNotes.length > 0 ? { contextNotes } : {}),
         ...(contextFiles.length > 0 ? { contextFiles } : {}),
-        ...(contextLinks.length > 0 ? { contextLinks } : {}),
-        ...(outputNotes.length > 0 ? { outputNotes } : {})
+        ...(contextLinks.length > 0 ? { contextLinks } : {})
       })
     })()
   }
@@ -1153,29 +1218,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         set({ shiftPicks: next }) // first pick — wait for the partner
         return
       }
-      // Second pick: clear the tally, then wire the one edge these two kinds
-      // allow, using click order for direction (source = first, target =
-      // second). A chat feeds a note (output); a note/file/link feeds a chat
-      // (context). Research chats can neither drive a note nor take context.
-      // The add* actions re-validate and no-op on a bad or duplicate pair.
+      // Second pick: clear the tally and connect the pair. Connections are
+      // undirected, so click order doesn't matter; addContextEdge re-validates
+      // (at least one non-research chat in the pair) and no-ops on a bad or
+      // duplicate pair — `connected` reads whether a wire actually landed.
       set({ shiftPicks: [] })
       const [aId, bId] = next
-      const a = get().nodes.find((n) => n.id === aId)
-      const b = get().nodes.find((n) => n.id === bId)
-      let connected = false
-      if (a && b) {
-        if (isChat(a) && a.data.kind !== 'research' && isNote(b)) {
-          get().addOutputEdge(a.id, b.id)
-          connected = true
-        } else if (
-          (isNote(a) || isFile(a) || isLink(a)) &&
-          isChat(b) &&
-          b.data.kind !== 'research'
-        ) {
-          get().addContextEdge(a.id, b.id)
-          connected = true
-        }
-      }
+      const before = get().edges.length
+      get().addContextEdge(aId, bId)
+      const connected = get().edges.length > before
       // A wired pair drops the selection it left behind; a non-pair stays
       // multi-selected (React Flow's own shift-select) so it can drag together.
       if (connected)
@@ -1729,20 +1780,21 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       return node.id
     },
 
-    forkAndSend: (sourceId, prompt) => {
+    forkWithDraft: (sourceId, draft) => {
       const src = get().nodes.find((n) => n.id === sourceId)
       if (!src) return null
       // A chat forks at its tip (transcript carries the quoted passage as
       // context); a note/file/link spawns a fresh chat wired to read it. Both
-      // helpers auto-place the new card just right of the source.
+      // helpers auto-place the new card just right of the source with its
+      // composer focused, so the seeded draft is ready to type under. Nothing
+      // sends until the user does — the pending fork is consumed by first send.
       const newId = isChat(src)
         ? get().forkChat(sourceId)
         : isNote(src) || isFile(src) || isLink(src)
           ? get().chatAbout(sourceId)
           : null
       if (!newId) return null
-      get().setDraft(newId, prompt)
-      get().send(newId)
+      get().setDraft(newId, draft)
       return newId
     },
 
@@ -1886,18 +1938,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     },
 
     addContextEdge: (sourceId, chatId) => {
+      // THE connection creator. Connections are undirected — either argument
+      // order lands the same wire (source/target only record how it was
+      // drawn). Valid pairs must include at least one chat (a note wired to a
+      // note would mean nothing): chat—note/file/link/chat. Research chats are
+      // display-only and connect to nothing; labels never connect.
       const s = get()
-      const src = s.nodes.find((n) => n.id === sourceId)
-      const tgt = s.nodes.find((n) => n.id === chatId)
-      if (!src || !tgt || sourceId === chatId || !isChat(tgt)) return
-      // A note/file/link feeds a chat as context; a chat can also feed another
-      // chat (its transcript rides along). Research chats take no context.
-      const validSrc =
-        isNote(src) || isFile(src) || isLink(src) || (isChat(src) && src.data.kind !== 'research')
-      if (!validSrc) return
-      if (tgt.data.kind === 'research') return
-      if (s.edges.some((e) => e.kind === 'context' && e.source === sourceId && e.target === chatId))
-        return // already connected
+      const a = s.nodes.find((n) => n.id === sourceId)
+      const b = s.nodes.find((n) => n.id === chatId)
+      if (!a || !b || sourceId === chatId) return
+      const connectable = (n: CanvasNode): boolean =>
+        isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research')
+      if (!connectable(a) || !connectable(b)) return
+      if (!isChat(a) && !isChat(b)) return
+      if (
+        s.edges.some(
+          (e) =>
+            (e.kind === 'context' || e.kind === 'output') &&
+            ((e.source === sourceId && e.target === chatId) ||
+              (e.source === chatId && e.target === sourceId))
+        )
+      )
+        return // already connected (in either drawn direction)
       set((st) => ({
         edges: [...st.edges, { id: uid(), source: sourceId, target: chatId, kind: 'context' }]
       }))
@@ -1928,20 +1990,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const chat = spawnNode(pos)
       get().addContextEdge(sourceId, chat.id)
       return chat.id
-    },
-
-    addOutputEdge: (chatId, noteId) => {
-      const s = get()
-      const src = s.nodes.find((n) => n.id === chatId)
-      const tgt = s.nodes.find((n) => n.id === noteId)
-      // chat → note only; research chats can't edit, so they can't drive a note
-      if (!src || !tgt || !isChat(src) || src.data.kind === 'research' || !isNote(tgt)) return
-      if (s.edges.some((e) => e.kind === 'output' && e.source === chatId && e.target === noteId))
-        return // already connected
-      set((st) => ({
-        edges: [...st.edges, { id: uid(), source: chatId, target: noteId, kind: 'output' }]
-      }))
-      persist()
     },
 
     discardNode: (id) => {
@@ -1988,15 +2036,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const text = node.data.draft.trim()
       if (!text) return
 
-      // Computer use needs a live tab to drive — catch it before the send
-      // mutates anything, so the draft survives the nudge.
+      // Computer use needs a wired, live tab — without one, spawn a fresh tab
+      // just left of the chat and wire it, so asking a bare chat to browse
+      // just works. The turn dispatches once the tab's guest attaches.
       const computer = node.data.computerArmed ? computerTargetFor(id) : null
-      if (node.data.computerArmed && !computer) {
-        useToastStore
-          .getState()
-          .show('Computer use needs a browser tab: add a tab and connect it to this chat')
-        return
-      }
+      const spawnedTab = node.data.computerArmed && !computer ? spawnComputerTab(node) : null
       // Give the driven tab a desktop viewport before the turn's first
       // screenshot — the resize lands in the DOM long before the agent looks.
       if (computer) growTabForComputer(computer.targetId)
@@ -2033,7 +2077,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persist() // title may have changed
       persistThread(id) // the user message is part of the durable transcript now
 
-      dispatchTurn(node, text, { research: node.data.researchArmed, computer })
+      if (spawnedTab) {
+        void awaitComputerTab(spawnedTab).then((target) =>
+          dispatchTurn(node, text, { research: node.data.researchArmed, computer: target })
+        )
+      } else {
+        dispatchTurn(node, text, { research: node.data.researchArmed, computer })
+      }
     },
 
     // Re-run a failed turn: same prompt, same session. The session resume may
@@ -2341,6 +2391,12 @@ window.api.thread.onEvent((event) => {
       }
     })
   } else if (event.type === 'computer-action') {
+    // Light up the driven tab: badge + animated drive wire until the turn
+    // settles ('done' clears it via drivenTabs).
+    if (drivenTabs.get(event.nodeId) !== event.targetId) {
+      drivenTabs.set(event.nodeId, event.targetId)
+      patch(event.targetId, (node) => (isLink(node) ? { driven: true } : {}))
+    }
     // One live chip per contiguous run of browser actions: consecutive actions
     // replace the chip's text (with a running step count from main) instead of
     // stacking one transcript line per click. A trailing empty assistant
@@ -2461,6 +2517,12 @@ window.api.thread.onEvent((event) => {
         }
       })
       return
+    }
+    // The turn settled — the driven tab (if any) is free again.
+    const drivenTab = drivenTabs.get(event.nodeId)
+    if (drivenTab) {
+      drivenTabs.delete(event.nodeId)
+      patch(drivenTab, (node) => (isLink(node) ? { driven: false } : {}))
     }
     // Safety sweep: a turn that errored mid-research leaves no childDone — settle any
     // still-pending inline research chips.

@@ -3,16 +3,17 @@ import { X } from 'lucide-react'
 import { useCanvasStore } from '../store/canvas'
 
 /**
- * Context connector: note/file → chat, source's right circle to target's top
- * circle, arrowhead on the chat end. While it exists, the source rides the
- * chat's sends (notes
- * as system-prompt content; images and PDFs as image/document blocks injected
- * into the conversation once per session). The midpoint × disconnects it.
+ * Connection wire: an undirected, arrowless line between two cards' knobs.
+ * While it exists, the connected resource rides the chat's sends (notes as
+ * system-prompt content; pages from tabs; images and PDFs as blocks injected
+ * once per session). The midpoint × disconnects it.
  */
 
-// Stop the arrow just shy of the target circle so the head rests above the
-// white ring instead of digging into it.
-const TARGET_GAP = 3
+// React Flow anchors an edge at a top-positioned handle's TOP edge, which
+// leaves the line floating just shy of the knob's white ring. Extend both
+// endpoints down to the knob centers — the knob draws above the edge layer,
+// so the wire visually plugs straight into it.
+const KNOB_PLUG = 16 // ≈ knob radius (31px knob + 2px ring)
 export default function ContextEdge({
   id,
   sourceX,
@@ -22,20 +23,21 @@ export default function ContextEdge({
   sourcePosition,
   targetPosition,
   style,
+  markerStart,
   markerEnd
 }: EdgeProps): React.JSX.Element {
   const removeContextEdge = useCanvasStore((s) => s.removeContextEdge)
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
-    sourceY,
+    sourceY: sourceY + KNOB_PLUG,
     sourcePosition,
     targetX,
-    targetY: targetY - TARGET_GAP,
+    targetY: targetY + KNOB_PLUG,
     targetPosition
   })
   return (
     <>
-      <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />
+      <BaseEdge id={id} path={path} style={style} markerStart={markerStart} markerEnd={markerEnd} />
       <EdgeLabelRenderer>
         <button
           type="button"

@@ -20,8 +20,10 @@ import {
   CHIP_BUTTON,
   CTX_HANDLE_ID,
   ctxHandleStyle,
+  ctxTargetStyle,
   DRAG_HEADER,
-  HIDDEN_HANDLE
+  HIDDEN_HANDLE,
+  OUTPUT_HANDLE_ID
 } from '../lib/nodeChrome'
 import { useTitleGuard } from '../lib/titleGuard'
 import TitleEditSlot from './TitleEditSlot'
@@ -96,22 +98,36 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
       {/* hidden layout anchors (left/right) for any future edges */}
       <Handle type="target" position={Position.Left} isConnectable={false} style={HIDDEN_HANDLE} />
       <Handle type="source" position={Position.Right} isConnectable={false} style={HIDDEN_HANDLE} />
-      {/* the context connector: drag this square onto a chat's circle — or
-          tap it and the arrow follows the cursor until a click on a chat
-          commits (ContextConnectOverlay) — to let that chat read this page
-          (each send extracts the rendered page from this tab's guest;
-          WebFetch is the fallback when the guest isn't mounted). A square
-          because, like a note, a tab is a resource. */}
+      {/* live-drive badge: a computer-use turn is controlling this tab. */}
+      {data.driven && (
+        <div className="absolute -bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-(--np-accent) px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-white shadow-sm">
+          <span className="animate-pulse">Claude is browsing…</span>
+        </div>
+      )}
+      {/* the connection knob — a stacked source/target pair at the top (see
+          nodeChrome): drag it onto a chat (or tap, then click one) to let
+          that chat read this page (each send extracts the rendered page from
+          this tab's guest; WebFetch is the fallback when the guest isn't
+          mounted) — and, with the chat's pointer toggle armed, drive it.
+          A square because, like a note, a tab is a resource. */}
       <Handle
         id={CTX_HANDLE_ID}
+        type="target"
+        position={Position.Top}
+        isConnectable
+        isConnectableStart={false}
+        style={ctxTargetStyle()}
+      />
+      <Handle
+        id={OUTPUT_HANDLE_ID}
         type="source"
-        position={Position.Right}
+        position={Position.Top}
         isConnectable
         isConnectableEnd={false}
         title={
           data.pinned
             ? 'In memory — its clipped page is pulled in on demand. Drag to also wire it into a chat.'
-            : 'Drag — or tap, then click a chat — to attach this page as context'
+            : 'Drag — or tap, then click a chat — to connect this tab'
         }
         onClick={(e) => {
           // keep the tap from reaching the overlay's window listener,
@@ -121,14 +137,14 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{
-          ...ctxHandleStyle(palette.accent, 'right', 'square'),
+          ...ctxHandleStyle(palette.accent, 'top', 'square'),
           // In memory: a white brain rides inside the knob (mirrors notes/files),
           // faded to read as "optional — already in memory".
           ...(data.pinned
             ? {
                 width: 36,
                 height: 36,
-                right: -24,
+                top: -24,
                 opacity: 0.85,
                 display: 'flex',
                 alignItems: 'center',
