@@ -6,7 +6,8 @@ import {
   dialog,
   ipcMain,
   safeStorage,
-  session
+  session,
+  webContents
 } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { promises as fs, readFileSync, constants as fsConstants } from 'fs'
@@ -21,6 +22,7 @@ import {
 } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
 import { initAutoUpdater } from './updater'
+import { computerAppend, createComputerServer, describeComputerAction } from './computerUse'
 import {
   BROWSE_PARTITION,
   DEFAULT_EFFORT,
@@ -1389,6 +1391,7 @@ function registerThreadIpc(): void {
         kind,
         noteTitle,
         research,
+        computer,
         model,
         effort,
         contextNotes,
@@ -1439,6 +1442,31 @@ function registerThreadIpc(): void {
       if (kind === 'note' && !notePath) {
         emit({ nodeId, type: 'done', ok: false, error: 'Unknown note' })
         return
+      }
+
+      // Computer use: the renderer resolved a wired tab's guest webContents id.
+      // Trust nothing about it — only a <webview> guest living in the app's
+      // isolated browse partition may ever be driven, never the app window
+      // itself (a compromised renderer could otherwise click its own UI).
+      const computerWc = computer ? webContents.fromId(computer.webContentsId) : undefined
+      const computerTarget =
+        computer &&
+        computerWc &&
+        !computerWc.isDestroyed() &&
+        computerWc.getType() === 'webview' &&
+        computerWc.session === session.fromPartition(BROWSE_PARTITION)
+          ? computer
+          : null
+      const computerServer = computerTarget ? createComputerServer(computerTarget) : null
+      if (computer) {
+        console.log(
+          `[computer] node=${nodeId.slice(0, 8)} target=${computer.targetId.slice(0, 8)}` +
+            ` wcId=${computer.webContentsId} url=${computer.url}` +
+            ` valid=${computerTarget !== null}` +
+            (computerTarget === null
+              ? ` (type=${computerWc?.getType() ?? 'gone'} destroyed=${computerWc?.isDestroyed() ?? 'n/a'})`
+              : '')
+        )
       }
 
       // Notes this chat may write (output edges) — declared outside the try so
@@ -1667,7 +1695,8 @@ function registerThreadIpc(): void {
           filesAppend,
           linksAppend,
           memoryAppend,
-          research ? RESEARCH_APPEND : ''
+          research ? RESEARCH_APPEND : '',
+          computerTarget ? computerAppend(computerTarget) : ''
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -1745,9 +1774,17 @@ function registerThreadIpc(): void {
               ...(systemAppend ? { append: systemAppend } : {})
             },
             // Configured MCP servers are available to every turn; their tools
-            // auto-approve in canUseTool (see autoAllowed). null when MCP is
-            // off/unconfigured, so the key is omitted entirely.
-            ...(activeMcpServers() ? { mcpServers: activeMcpServers()! } : {}),
+            // auto-approve in canUseTool (see autoAllowed). A computer-use turn
+            // adds the in-process computer server on top. The key is omitted
+            // entirely when there's nothing to pass.
+            ...(activeMcpServers() || computerServer
+              ? {
+                  mcpServers: {
+                    ...(activeMcpServers() ?? {}),
+                    ...(computerServer ? { computer: computerServer } : {})
+                  }
+                }
+              : {}),
             ...(research
               ? {
                   // Researchers also get any configured MCP tools, alongside
@@ -1758,7 +1795,13 @@ function registerThreadIpc(): void {
                   // prompts; everything else still routes through canUseTool.
                   // Research sets a strict allowlist, so MCP tools must be named
                   // here too or they'd be blocked despite being configured.
-                  allowedTools: ['Agent', 'WebSearch', 'WebFetch', ...mcpAllowedTools()],
+                  allowedTools: [
+                    'Agent',
+                    'WebSearch',
+                    'WebFetch',
+                    ...mcpAllowedTools(),
+                    ...(computerServer ? ['mcp__computer__computer'] : [])
+                  ],
                   forwardSubagentText: true
                 }
               : {}),
@@ -1810,6 +1853,11 @@ function registerThreadIpc(): void {
                       message: `This session may only edit the note file at ${notePath}.`
                     }
               }
+              // Arming the computer toggle IS consent to drive the connected
+              // tab — same contract as wiring a link consenting to its fetch.
+              // Prompting per click would make browsing unusable.
+              if (computerServer && toolName === 'mcp__computer__computer')
+                return { behavior: 'allow', updatedInput: input }
               // Global auto-allows answer without a prompt. (The note-file
               // guard above still wins for note sessions' edit tools.)
               if (autoAllowed(toolName)) return { behavior: 'allow', updatedInput: input }
@@ -1856,6 +1904,8 @@ function registerThreadIpc(): void {
         let streamedAnyText = false
         // Last note content mirrored to the renderer — only emit real changes.
         let mirroredNote: string | undefined
+        // Computer-use actions this turn — numbers the inline transcript chip.
+        let computerSteps = 0
 
         for await (const msg of turn) {
           // Verbose trace while research mode is young: every non-delta message,
@@ -1913,6 +1963,22 @@ function registerThreadIpc(): void {
             }
           } else if (msg.type === 'assistant' && msg.parent_tool_use_id === null) {
             lastAssistantUuid = msg.uuid
+            // Computer-use calls surface as a live status chip in the chat —
+            // the complete assistant message lands before the tool executes,
+            // so the chip always precedes the action it describes.
+            if (computerTarget) {
+              for (const block of msg.message.content) {
+                if (block.type === 'tool_use' && block.name === 'mcp__computer__computer') {
+                  computerSteps++
+                  emit({
+                    nodeId,
+                    type: 'computer-action',
+                    targetId: computerTarget.targetId,
+                    text: `${describeComputerAction(block.input as Record<string, unknown>)} · step ${computerSteps}`
+                  })
+                }
+              }
+            }
             // Spot edits the chat lands on pinned/other note files before the
             // tool runs (the assistant message precedes execution), so the
             // pre-edit content can be preserved as a 'user' version.

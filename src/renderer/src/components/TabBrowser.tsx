@@ -22,6 +22,7 @@ interface WebviewEl extends HTMLElement {
   canGoBack(): boolean
   canGoForward(): boolean
   executeJavaScript(code: string): Promise<unknown>
+  getWebContentsId(): number
 }
 
 /** One box, two jobs: a URL navigates, anything else becomes a Google search
@@ -302,6 +303,10 @@ export default function TabBrowser({
           partition={BROWSE_PARTITION}
           // eslint-disable-next-line react/no-unknown-property -- same as above
           useragent={CLEAN_UA}
+          // Keep the guest painting while occluded or backgrounded — computer
+          // use screenshots it via capturePage, which throttling would starve.
+          // eslint-disable-next-line react/no-unknown-property -- same as above
+          webpreferences="backgroundThrottling=no"
           style={{ display: 'flex', width: '100%', height: '100%' }}
         />
         {failed && (

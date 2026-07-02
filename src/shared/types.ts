@@ -41,7 +41,7 @@ export interface PersistedMessage {
   role: 'user' | 'assistant'
   text: string
   uuid?: string // SDK assistant-message uuid — the fork anchor (resumeSessionAt)
-  kind?: 'research-spawn' | 'research-done'
+  kind?: 'research-spawn' | 'research-done' | 'computer-action'
 }
 
 /** One snapshot of a note's content. The live content is the note's .md file;
@@ -160,13 +160,13 @@ export interface ThreadDoc {
 export const MODEL_OPTIONS = [
   { id: 'claude-fable-5', label: 'Fable 5' },
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5' }
 ] as const
 
 export type ModelId = (typeof MODEL_OPTIONS)[number]['id']
 
-export const DEFAULT_MODEL: ModelId = 'claude-sonnet-4-6'
+export const DEFAULT_MODEL: ModelId = 'claude-sonnet-5'
 
 // Cheap one-shot background jobs (chat titles) always run on the small model,
 // regardless of the user's picker choice.
@@ -248,6 +248,19 @@ export interface ContextLink {
   content?: string
 }
 
+/** The browser tab a computer-use turn drives — resolved by the renderer at
+ *  send time from the chat's wired link nodes (the first with a live <webview>
+ *  guest). Main re-validates the id: only a guest in the browse partition may
+ *  ever be driven, never the app window itself. */
+export interface ComputerTarget {
+  /** The link node's id — computer-action events carry it so the UI knows which tab. */
+  targetId: string
+  /** The guest's webContents id, from <webview>.getWebContentsId(). */
+  webContentsId: number
+  title: string
+  url: string
+}
+
 export interface ThreadSendArgs {
   nodeId: string
   text: string
@@ -264,6 +277,9 @@ export interface ThreadSendArgs {
   noteTitle?: string
   /** Research mode: the lead may spawn researcher subagents for this turn. */
   research?: boolean
+  /** Computer use: the turn may drive this connected browser tab (screenshots,
+   *  clicks, typing, scrolling) via an in-process MCP tool. */
+  computer?: ComputerTarget
   /** Notes connected to this chat by context edges, freshest content first-hand
    *  from the renderer's store. */
   contextNotes?: ContextNote[]
@@ -374,6 +390,10 @@ export type ThreadEvent =
   | { nodeId: string; type: 'spawn'; toolUseId: string; description: string }
   | { nodeId: string; type: 'childDelta'; toolUseId: string; text: string }
   | { nodeId: string; type: 'childDone'; toolUseId: string }
+  // Computer use: the turn is about to run one browser action (click, type,
+  // scroll, …). text is the human-readable description for the inline chip;
+  // targetId is the driven link node.
+  | { nodeId: string; type: 'computer-action'; targetId: string; text: string }
   | { nodeId: string; type: 'permission'; request: PermissionRequest }
   // The request settled (user clicked, or the turn was aborted) — dismiss the prompt.
   | { nodeId: string; type: 'permission-resolved'; requestId: string }

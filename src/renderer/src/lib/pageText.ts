@@ -12,6 +12,8 @@ import Defuddle from 'defuddle/full'
 /** What we need from a mounted <webview> — registered by TabBrowser. */
 export interface GuestView {
   executeJavaScript(code: string): Promise<unknown>
+  /** Attached guests only — throws before the webview finishes attaching. */
+  getWebContentsId?(): number
 }
 
 // Live guests by link-node id. A minimized tab has no guest (the body
@@ -24,6 +26,21 @@ export function registerGuest(id: string, view: GuestView): void {
 
 export function unregisterGuest(id: string, view: GuestView): void {
   if (guests.get(id) === view) guests.delete(id)
+}
+
+/**
+ * The guest's webContents id, for main-process control (computer use), or null
+ * when the tab has no live, attached guest — a minimized tab unmounts its
+ * guest, and a freshly mounted one hasn't attached yet.
+ */
+export function guestWebContentsId(nodeId: string): number | null {
+  const guest = guests.get(nodeId)
+  if (!guest?.getWebContentsId) return null
+  try {
+    return guest.getWebContentsId()
+  } catch {
+    return null // not attached yet
+  }
 }
 
 // A page rides the system prompt every turn — keep one tab from drowning it.

@@ -4,6 +4,7 @@ import { DEFAULT_EFFORT, DEFAULT_MODEL, EFFORT_OPTIONS, MODEL_OPTIONS } from '..
 import type {
   CanvasDoc,
   ChosenFile,
+  ComputerTarget,
   ContextFile,
   ContextLink,
   EffortId,
@@ -18,7 +19,7 @@ import type {
   TurnUsage
 } from '../../../shared/types'
 import { contrastColorId, nextColorId } from '../lib/palette'
-import { extractPageMarkdown } from '../lib/pageText'
+import { extractPageMarkdown, guestWebContentsId } from '../lib/pageText'
 import { useToastStore } from './toast'
 
 export const NODE_W = 600
@@ -80,6 +81,9 @@ export interface ChatData {
   // no forking, no session of their own (they ran inside the lead's session).
   kind?: 'research'
   researchArmed?: boolean // composer toggle: the next send runs in research mode
+  // Composer toggle: sends drive a connected browser tab (computer use).
+  // Sticky — browsing is a conversation-long mode, unlike one-shot research.
+  computerArmed?: boolean
   // File node ids (images and PDFs) whose bytes this chat's session has
   // already seen — only newly connected files ride the next send as blocks.
   // The name predates PDF support; kept for canvas.json compatibility.
@@ -512,6 +516,7 @@ interface CanvasState {
   retry: (id: string) => void
   sendNote: (id: string) => Promise<void>
   toggleResearch: (id: string) => void
+  toggleComputer: (id: string) => void
   respondPermission: (id: string, requestId: string, allow: boolean) => void
   // Fork the chat at its tip. With `at`, the new node's top-left lands there
   // (click-to-place from the output knob); without it, findForkSpot picks a slot.
@@ -886,6 +891,49 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           : []
       })
 
+  // The tab a computer-use turn drives: the first wired link (direct wires
+  // first, then upstream chats') whose <webview> guest is alive right now.
+  // A minimized tab has no guest and sits out, same as page extraction.
+  const computerTargetFor = (id: string): ComputerTarget | null => {
+    const links = [
+      ...contextLinksFor(id),
+      ...upstreamChats(id).flatMap((c) => contextLinksFor(c.chat.id))
+    ]
+    for (const l of links) {
+      const webContentsId = guestWebContentsId(l.id)
+      if (webContentsId !== null)
+        return { targetId: l.id, webContentsId, title: l.title, url: l.url }
+    }
+    return null
+  }
+
+  // Desktop viewport for a driven tab. The webview's CSS viewport is the
+  // node's layout size, and below ~1024 CSS px sites serve their mobile
+  // layout — hamburger menus, hidden search, no hover — which is much harder
+  // for the model to drive. 1280 is the canonical desktop width; 900 tall
+  // leaves a ~1280×800 page box under the tab chrome (the classic computer-use
+  // envelope). Grow-only: a tab the user already made bigger stays put.
+  const COMPUTER_TAB = { width: 1280, height: 900 }
+  const growTabForComputer = (targetId: string): void => {
+    const node = get().nodes.find((n) => n.id === targetId)
+    if (!node || !isLink(node)) return
+    const w = node.width ?? node.measured?.width ?? NODE_W
+    const h = node.height ?? node.measured?.height ?? 0
+    if (w >= COMPUTER_TAB.width && h >= COMPUTER_TAB.height) return
+    set((s) => ({
+      nodes: s.nodes.map((n) =>
+        n.id === targetId
+          ? ({
+              ...n,
+              width: Math.max(w, COMPUTER_TAB.width),
+              height: Math.max(h, COMPUTER_TAB.height)
+            } as CanvasNode)
+          : n
+      )
+    }))
+    persist()
+  }
+
   const withPageContent = (links: ContextLink[]): Promise<ContextLink[]> =>
     Promise.all(
       links.map(async (l) => {
@@ -898,7 +946,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
   // by send and retry — the only per-call differences are the prompt text and
   // whether research mode rides along. `node` is the chat as it was before the
   // streaming-state update (its session/fork/injected ledger are read here).
-  const dispatchTurn = (node: ChatNode, text: string, opts?: { research?: boolean }): void => {
+  const dispatchTurn = (
+    node: ChatNode,
+    text: string,
+    opts?: { research?: boolean; computer?: ComputerTarget | null }
+  ): void => {
     const id = node.id
     const dedupeById = <T extends { id: string }>(xs: T[]): T[] => {
       const seen = new Set<string>()
@@ -947,6 +999,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         // first send of a forked node: fork the parent session at the anchor
         ...(!node.data.sessionId && node.data.forkOf ? { forkFrom: node.data.forkOf } : {}),
         ...(opts?.research ? { research: true } : {}),
+        ...(opts?.computer ? { computer: opts.computer } : {}),
         ...(contextNotes.length > 0 ? { contextNotes } : {}),
         ...(contextFiles.length > 0 ? { contextFiles } : {}),
         ...(contextLinks.length > 0 ? { contextLinks } : {}),
@@ -1609,6 +1662,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persist()
     },
 
+    toggleComputer: (id) => {
+      const node = get().nodes.find((n) => n.id === id)
+      if (node && isChat(node)) patchData(id, { computerArmed: !node.data.computerArmed })
+    },
+
     toggleResearch: (id) => {
       const node = get().nodes.find((n) => n.id === id)
       if (node && isChat(node)) patchData(id, { researchArmed: !node.data.researchArmed })
@@ -1930,6 +1988,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const text = node.data.draft.trim()
       if (!text) return
 
+      // Computer use needs a live tab to drive — catch it before the send
+      // mutates anything, so the draft survives the nudge.
+      const computer = node.data.computerArmed ? computerTargetFor(id) : null
+      if (node.data.computerArmed && !computer) {
+        useToastStore
+          .getState()
+          .show('Computer use needs a browser tab: add a tab and connect it to this chat')
+        return
+      }
+      // Give the driven tab a desktop viewport before the turn's first
+      // screenshot — the resize lands in the DOM long before the agent looks.
+      if (computer) growTabForComputer(computer.targetId)
+
       const userMsg: Message = { id: uid(), role: 'user', text }
       const assistantMsg: Message = { id: uid(), role: 'assistant', text: '' }
       // Sized to the screen at send time so the reply never grows past the
@@ -1962,7 +2033,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       persist() // title may have changed
       persistThread(id) // the user message is part of the durable transcript now
 
-      dispatchTurn(node, text, { research: node.data.researchArmed })
+      dispatchTurn(node, text, { research: node.data.researchArmed, computer })
     },
 
     // Re-run a failed turn: same prompt, same session. The session resume may
@@ -2003,8 +2074,12 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
 
       // Retry repeats the last prompt on the same session; research never
-      // re-arms here (it was a one-shot on the original send).
-      dispatchTurn(node, lastUser.text)
+      // re-arms here (it was a one-shot on the original send). Computer use is
+      // sticky, so a still-armed chat retries with its tab — if the tab died,
+      // the retry just runs without it and the model says so.
+      const computer = node.data.computerArmed ? computerTargetFor(id) : null
+      if (computer) growTabForComputer(computer.targetId)
+      dispatchTurn(node, lastUser.text, { computer })
     },
 
     sendNote: async (id) => {
@@ -2254,9 +2329,42 @@ window.api.thread.onEvent((event) => {
       if (!isChat(node)) return {}
       const last = node.data.messages[node.data.messages.length - 1]
       if (!last || last.role !== 'assistant') return {}
+      // Never glue text into a status chip (research/computer) — text that
+      // resumes after a chip opens a fresh bubble instead.
+      if (last.kind) {
+        return {
+          messages: [...node.data.messages, { id: uid(), role: 'assistant', text: event.text }]
+        }
+      }
       return {
         messages: [...node.data.messages.slice(0, -1), { ...last, text: last.text + event.text }]
       }
+    })
+  } else if (event.type === 'computer-action') {
+    // One live chip per contiguous run of browser actions: consecutive actions
+    // replace the chip's text (with a running step count from main) instead of
+    // stacking one transcript line per click. A trailing empty assistant
+    // placeholder stays last so the turn's text keeps streaming into it.
+    patch(event.nodeId, (node) => {
+      if (!isChat(node)) return {}
+      const msgs = node.data.messages
+      const tail = msgs[msgs.length - 1]
+      const keepTail = tail && tail.role === 'assistant' && !tail.kind && tail.text === ''
+      const body = keepTail ? msgs.slice(0, -1) : [...msgs]
+      const prev = body[body.length - 1]
+      const next =
+        prev && prev.kind === 'computer-action'
+          ? [...body.slice(0, -1), { ...prev, text: event.text }]
+          : [
+              ...body,
+              {
+                id: uid(),
+                role: 'assistant' as const,
+                text: event.text,
+                kind: 'computer-action' as const
+              }
+            ]
+      return { messages: keepTail ? [...next, tail] : next }
     })
   } else if (event.type === 'spawn') {
     // The lead called the Agent tool — show an inline status chip in the parent chat.

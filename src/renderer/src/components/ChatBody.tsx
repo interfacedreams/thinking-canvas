@@ -6,7 +6,15 @@ import remarkBreaks from 'remark-breaks'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { RotateCcw, Telescope, TriangleAlert, Search, CheckCircle2, ArrowUp } from 'lucide-react'
+import {
+  RotateCcw,
+  Telescope,
+  TriangleAlert,
+  Search,
+  CheckCircle2,
+  ArrowUp,
+  MousePointerClick
+} from 'lucide-react'
 import { useCanvasStore, isChat, type Message } from '../store/canvas'
 import { useForwardedWheel } from '../lib/useForwardedWheel'
 import { MarkdownSourceContext, markdownComponents } from '../lib/markdownLink'
@@ -26,6 +34,17 @@ function MessageView({
         className="mr-1 mb-2 ml-auto w-fit max-w-full rounded-[10px] bg-white/85 px-3 py-2 break-words whitespace-pre-wrap"
       >
         {message.text}
+      </div>
+    )
+  }
+  if (message.kind === 'computer-action') {
+    return (
+      <div
+        data-msg={message.id}
+        className="mb-1 flex items-center gap-1.5 px-3 py-0.5 text-xs text-neutral-400"
+      >
+        <MousePointerClick size={11} className={`shrink-0 ${pending ? 'animate-pulse' : ''}`} />
+        <span className={pending ? 'animate-pulse' : ''}>{message.text}</span>
       </div>
     )
   }
@@ -93,6 +112,7 @@ const ChatBody = forwardRef<
   const retry = useCanvasStore((s) => s.retry)
   const respondPermission = useCanvasStore((s) => s.respondPermission)
   const toggleResearch = useCanvasStore((s) => s.toggleResearch)
+  const toggleComputer = useCanvasStore((s) => s.toggleComputer)
   const discardNode = useCanvasStore((s) => s.discardNode)
   const clearFocusDraft = useCanvasStore((s) => s.clearFocusDraft)
 
@@ -235,18 +255,32 @@ const ChatBody = forwardRef<
             className="block w-full resize-none bg-transparent px-3 py-2 outline-none placeholder:text-neutral-400"
           />
           <div className="flex items-center justify-between px-2 pb-1.5">
-            <button
-              type="button"
-              onClick={() => toggleResearch(id)}
-              title="Research mode: spawn parallel web researchers for this message"
-              className={`rounded-md p-1 transition-colors ${
-                data.researchArmed
-                  ? 'bg-(--np-accent) text-white'
-                  : 'text-neutral-400 hover:text-neutral-600'
-              }`}
-            >
-              <Telescope className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => toggleResearch(id)}
+                title="Research mode: spawn parallel web researchers for this message"
+                className={`rounded-md p-1 transition-colors ${
+                  data.researchArmed
+                    ? 'bg-(--np-accent) text-white'
+                    : 'text-neutral-400 hover:text-neutral-600'
+                }`}
+              >
+                <Telescope className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleComputer(id)}
+                title="Computer use: Claude drives a browser tab connected to this chat — clicks, typing, scrolling"
+                className={`rounded-md p-1 transition-colors ${
+                  data.computerArmed
+                    ? 'bg-(--np-accent) text-white'
+                    : 'text-neutral-400 hover:text-neutral-600'
+                }`}
+              >
+                <MousePointerClick className="h-5 w-5" />
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => send(id)}
