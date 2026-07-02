@@ -23,6 +23,16 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # dmg = what people download; zip = what electron-updater uses to self-update.
+  target:
+    - dmg
+    - zip
+  # Space-free artifact name: the productName has a space, which GitHub
+  # sanitizes differently per asset ("thinking-canvas-…zip" vs
+  # "thinking.canvas-…zip.blockmap"), so the updater 404s on the blockmap and
+  # falls back to a full 200 MB download. A literal name keeps the zip, its
+  # blockmap, and latest-mac.yml consistent, enabling differential updates.
+  artifactName: thinking-canvas-${version}-${arch}-mac.${ext}
   entitlementsInherit: build/entitlements.mac.plist
   hardenedRuntime: true
   gatekeeperAssess: false
@@ -33,7 +43,10 @@ mac:
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
 dmg:
-  artifactName: ${productName}-${version}.${ext}
+  # Version-less name so the website's "Download" button can point at a stable
+  # URL: github.com/<owner>/<repo>/releases/latest/download/thinking-canvas-mac.dmg
+  # (electron-updater uses the versioned .zip + latest-mac.yml, not this dmg.)
+  artifactName: thinking-canvas-mac.${ext}
 linux:
   target:
     - AppImage
@@ -45,5 +58,12 @@ appImage:
   artifactName: ${productName}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: interfacedreams
+  repo: thinking-canvas
+  # Publish a live release directly instead of a draft. Without this,
+  # electron-builder defaults to a draft that must be published by hand in the
+  # GitHub UI — an easy step to forget, which strands the update feed on the
+  # previous version (exactly what happened with 0.1.7). Auto-update needs the
+  # release live for latest-mac.yml to be served.
+  releaseType: release

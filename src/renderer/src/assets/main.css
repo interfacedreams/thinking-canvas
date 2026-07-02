@@ -191,24 +191,6 @@ body {
   }
 }
 
-/* Fork-armed knob: concentric rings ping outward from a forkable chat's
-   output circle, signalling that the next empty-canvas click drops a fork. */
-.ctx-fork-ping {
-  animation: ctx-fork-ping 1.6s ease-out infinite;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-@keyframes ctx-fork-ping {
-  0% {
-    transform: scale(1);
-    opacity: 0.7;
-  }
-  100% {
-    transform: scale(3.2);
-    opacity: 0;
-  }
-}
-
 /* Minimal markdown styling for assistant messages */
 .prose-chat > :first-child {
   margin-top: 0;

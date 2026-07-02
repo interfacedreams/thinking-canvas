@@ -20,6 +20,7 @@ import {
   type SDKUserMessage
 } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
+import { initAutoUpdater } from './updater'
 import {
   BROWSE_PARTITION,
   DEFAULT_EFFORT,
@@ -1150,11 +1151,13 @@ const BASE_APPEND =
   'This is a thinking canvas, not a code repository: you may pull in any relevant ' +
   "files from the memory index but otherwise don't explore the filesystem unless " +
   "explicitly asked. Also don't do any building or producing artifacts like HTML. " +
+  'Ordinary web search is fine: if the user asks you to "search", "look something ' +
+  'up", or find current information, just use WebSearch/WebFetch directly and answer. ' +
   'Research mode is NOT selected for this request, so never run a deep research ' +
-  'workflow on your own. If the request seems like it would benefit from deep ' +
-  'research (or uses the term "research" or mentions effort like "search ' +
-  'thoroughly"), do not start researching — first ask the user "Do you want me to ' +
-  'run a deep research workflow for this?" and wait for their answer before proceeding.'
+  'workflow (spawning multiple researcher subagents to produce a long cited report) ' +
+  'on your own. Only when the user EXPLICITLY asks for "deep research" should you ' +
+  'first ask "Do you want me to run a deep research workflow for this?" and wait for ' +
+  'their answer. A plain request to search is not a request for deep research.'
 
 const RESEARCH_APPEND =
   'Research mode is on for this request. Plan briefly, then spawn 2-3 researcher subagents IN PARALLEL ' +
@@ -2611,6 +2614,10 @@ app.whenReady().then(async () => {
   // Loads filter lists (cached after first run) and applies blocking to the
   // browse session — fired non-blocking so it never delays window creation.
   void initAdblock()
+
+  // Check GitHub Releases for a newer version and self-update in the background.
+  // No-op in dev (unpackaged); only runs in a real build.
+  initAutoUpdater()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

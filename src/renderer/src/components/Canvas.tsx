@@ -29,9 +29,11 @@ import FolderChip from './FolderChip'
 import Sidebar from './Sidebar'
 import SettingsButton from './SettingsButton'
 import PlacementOverlay from './PlacementOverlay'
+import SelectionForkMenu from './SelectionForkMenu'
 import DeleteChatModal from './DeleteChatModal'
 import ExpandedPanel from './ExpandedPanel'
 import Toast from './Toast'
+import UpdateProgress from './UpdateProgress'
 import { useToastStore } from '../store/toast'
 import { useCanvasStore, NODE_W, isChat, isNote, isFile, isLink, isLabel } from '../store/canvas'
 import type { ChosenFile } from '../../../shared/types'
@@ -143,15 +145,15 @@ function CanvasInner(): React.JSX.Element {
       if (e.altKey || e.repeat) return
       const t = e.target as HTMLElement
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable) return
-      // Backspace / Delete removes selected labels directly (no confirm modal,
-      // matching their floating trash button). Restricted to labels so the key
-      // can't nuke a chat with messages from under the canvas.
+      // Backspace / Delete removes the selected node(s) directly — no confirm
+      // modal — except notes, which still pop the confirmation dialog since
+      // their text isn't recoverable. Forks are left in place (cascade = false).
       if (e.key === 'Backspace' || e.key === 'Delete') {
         const s = useCanvasStore.getState()
-        const labels = s.nodes.filter((n) => n.selected && isLabel(n))
-        if (labels.length > 0) {
+        const selected = s.nodes.filter((n) => n.selected)
+        if (selected.length > 0) {
           e.preventDefault()
-          labels.forEach((n) => s.deleteChat(n.id, false))
+          selected.forEach((n) => (isNote(n) ? s.requestDelete(n.id) : s.deleteChat(n.id, false)))
         }
         return
       }
@@ -527,6 +529,7 @@ function CanvasInner(): React.JSX.Element {
         )}
 
         {loaded && <PlacementOverlay />}
+        {loaded && <SelectionForkMenu />}
 
         {/* Corner legends replace the old app header. z-20 keeps them above
             the placement layer (z-10), so an armed spawn button can still be
@@ -558,6 +561,9 @@ function CanvasInner(): React.JSX.Element {
 
       {/* swooping error banner (unsupported drops, etc.) */}
       <Toast />
+
+      {/* download progress while an opted-in update is fetching */}
+      <UpdateProgress />
     </div>
   )
 }

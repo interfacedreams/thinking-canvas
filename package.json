@@ -1,6 +1,6 @@
 {
   "name": "thinking-canvas",
-  "version": "0.1.0",
+  "version": "0.1.11",
   "description": "Local-repo-native agentic research canvas",
   "main": "./out/main/index.js",
   "scripts": {
@@ -16,6 +16,8 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
+    "release:tag": "git tag v$npm_package_version 2>/dev/null; git push origin v$npm_package_version",
+    "release:mac": "npm run release:tag && node scripts/ensure-release.mjs && electron-vite build && electron-builder --mac --publish always",
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
@@ -31,6 +33,8 @@
     "@tiptap/starter-kit": "3.27.1",
     "@xyflow/react": "^12.11.0",
     "defuddle": "^0.18.1",
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.9",
     "katex": "^0.16.4",
     "lucide-react": "^1.17.0",
     "pdfjs-dist": "^6.0.227",

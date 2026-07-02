@@ -38,7 +38,7 @@ export default function ActionsLegend(): React.JSX.Element {
         type="button"
         onClick={() => setCollapsed(false)}
         title="Show actions"
-        className="flex cursor-pointer items-center gap-1.5 rounded-[14px] border border-black bg-white px-3.5 py-2 text-[12px] font-semibold text-black shadow-lg transition-colors hover:bg-neutral-100"
+        className="flex cursor-pointer items-center gap-1.5 rounded-[6px] border border-black bg-white px-3.5 py-2 text-[12px] font-semibold text-black shadow-lg transition-colors hover:bg-neutral-100"
       >
         <Plus className="h-3.5 w-3.5" />
         Actions

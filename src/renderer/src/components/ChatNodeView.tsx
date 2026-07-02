@@ -7,7 +7,7 @@ import {
   useStoreApi,
   type NodeProps
 } from '@xyflow/react'
-import { Brain, Minus, Trash2, TriangleAlert } from 'lucide-react'
+import { Brain, Minus, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { useCanvasStore, MAX_NODE_H, type ChatNode } from '../store/canvas'
 import { paletteFor } from '../lib/palette'
 import { usePanel } from '../lib/usePanel'
@@ -30,7 +30,7 @@ import TitleEditSlot from './TitleEditSlot'
 
 function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): React.JSX.Element {
   const setTitle = useCanvasStore((s) => s.setTitle)
-  const requestDelete = useCanvasStore((s) => s.requestDelete)
+  const deleteChat = useCanvasStore((s) => s.deleteChat)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
@@ -228,13 +228,15 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
           data.minimized ? '' : 'border-b border-(--np-edge)'
         }`}
       >
-        {!data.minimized && (
-          <Tooltip label="Minimize">
-            <button type="button" onClick={() => toggleMinimize(id)} className={CHIP_BUTTON}>
+        <Tooltip label={data.minimized ? 'Expand' : 'Minimize'}>
+          <button type="button" onClick={() => toggleMinimize(id)} className={CHIP_BUTTON}>
+            {data.minimized ? (
+              <Plus className="h-[25px] w-[25px]" />
+            ) : (
               <Minus className="h-[25px] w-[25px]" />
-            </button>
-          </Tooltip>
-        )}
+            )}
+          </button>
+        </Tooltip>
         <PanelChips mode={mode} open={open} />
         {editingTitle && !data.minimized ? (
           <input
@@ -315,7 +317,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
             </Tooltip>
           )}
           <Tooltip label="Delete this chat">
-            <button type="button" onClick={() => requestDelete(id)} className={CHIP_BUTTON}>
+            <button type="button" onClick={() => deleteChat(id, false)} className={CHIP_BUTTON}>
               <Trash2 className="h-[25px] w-[25px]" />
             </button>
           </Tooltip>

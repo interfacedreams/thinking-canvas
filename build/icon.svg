@@ -2,9 +2,9 @@
   <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#FFFFFF" />
   <g transform="translate(140 150) scale(8.2)">
     <!-- wires (drawn under the cards) -->
-    <line x1="27" y1="29" x2="46" y2="70" stroke="#8B5CF6" stroke-width="3" stroke-linecap="round" />
-    <line x1="71" y1="24" x2="46" y2="70" stroke="#F97316" stroke-width="3" stroke-linecap="round" />
-    <line x1="27" y1="29" x2="71" y2="24" stroke="#22C55E" stroke-width="3" stroke-linecap="round" />
+    <line x1="27" y1="29" x2="46" y2="70" stroke="#A78BFA" stroke-width="3" stroke-linecap="round" />
+    <line x1="71" y1="24" x2="46" y2="70" stroke="#4ADE80" stroke-width="3" stroke-linecap="round" />
+    <line x1="27" y1="29" x2="71" y2="24" stroke="#FB923C" stroke-width="3" stroke-linecap="round" />
     <!-- canvas cards: solid fills, no outline -->
     <rect x="10" y="18" width="34" height="22" rx="6" fill="#A78BFA" />
     <rect x="56" y="14" width="30" height="20" rx="6" fill="#FB923C" />

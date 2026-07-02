@@ -275,15 +275,16 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
   // A forkable chat, not yet aimed at a note, can drop a fork on empty canvas —
   // ping rings on its knob advertise that the next canvas click does something.
   const canFork = isChat(sourceNode) && chatForkable(sourceNode)
-  const showPing = canFork && !snapped
-  // The cursor pill spells out what a click will do at this moment.
+  // The cursor pill spells out what a click will do at this moment. Resource
+  // sources (note/file/link) stay silent — clicking empty space to drop a chat
+  // or another chat to connect is left for the user to discover; C still works.
   const hint = snapped
     ? 'Click to connect'
     : isChat(sourceNode)
       ? canFork
         ? 'Click empty space to fork · a note or chat to connect · C / N to drop one'
         : 'Click a note or chat to connect · C / N to drop one'
-      : 'Click a chat to connect · C to drop one'
+      : null
   const [path] = getBezierPath({
     sourceX: s.x,
     sourceY: s.y,
@@ -295,7 +296,7 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
 
   return (
     <>
-      {screenCursor && (
+      {screenCursor && hint && (
         <div
           className="pointer-events-none fixed z-[1000] -translate-y-1/2 translate-x-4 rounded-full bg-neutral-900/90 px-2.5 py-1 text-[12px] font-medium whitespace-nowrap text-white shadow-sm"
           style={{ left: screenCursor.x, top: screenCursor.y }}
@@ -346,17 +347,6 @@ function PendingArrow({ sourceId }: { sourceId: string }): React.JSX.Element | n
               stroke={accent}
               strokeWidth={2.5}
               className="ctx-pending-ring"
-            />
-          )}
-          {showPing && (
-            <circle
-              cx={s.x}
-              cy={s.y}
-              r={CIRCLE_R}
-              fill="none"
-              stroke={accent}
-              strokeWidth={2.5}
-              className="ctx-fork-ping"
             />
           )}
         </svg>
