@@ -1750,7 +1750,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       // the node's transcript starts clean and shows only what diverges.
       const node = makeNode(at ?? findForkSpot(parent), {
         // Start untitled like a fresh chat; the title is generated from the
-        // fork's own first turn rather than inherited from the parent.
+        // fork's own first message rather than inherited from the parent.
         color: parent.data.color, // forks stay in the parent's color family
         status: 'idle',
         growthCap: parent.data.growthCap,
@@ -2066,8 +2066,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
                   updatedAt: Date.now(),
                   lastError: undefined, // a fresh send supersedes any failed turn
                   // title is left as-is: an unnamed chat shows a "…" placeholder
-                  // and gets a real title from its content once the turn lands
-                  // (see the thread-event handler) — never the raw prompt.
+                  // while generateTitle (kicked off below) names it from this
+                  // message in the background — never the raw prompt verbatim.
                   researchArmed: false // one-shot: research applies to this send only
                 }
               } as CanvasNode)
@@ -2076,6 +2076,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       }))
       persist() // title may have changed
       persistThread(id) // the user message is part of the durable transcript now
+
+      // Name a still-unnamed chat from the user's message right away — no need
+      // to wait for the reply to land. A user rename (before or during the
+      // background title turn) always wins.
+      if (!node.data.title && node.data.kind !== 'research') {
+        generateTitle(id, `User: ${text.slice(0, 1500)}`, titleFromText(text), false)
+      }
 
       if (spawnedTab) {
         void awaitComputerTab(spawnedTab).then((target) =>
@@ -2315,11 +2322,11 @@ function titleFromText(text: string): string {
     .trim()
 }
 
-// Name a node in the background once its first turn lands: ask Haiku for a
-// concise title from `source` (a chat's opening exchange or a note's content)
-// and install it — unless the user has named the node in the meantime, whose
-// title always wins. A failed turn falls back to `fallback`; for notes the file
-// is renamed to match.
+// Name a node in the background: ask Haiku for a concise title from `source`
+// (a chat's first user message at send time, or a note's content once its turn
+// lands) and install it — unless the user has named the node in the meantime,
+// whose title always wins. A failed turn falls back to `fallback`; for notes
+// the file is renamed to match.
 function generateTitle(
   nodeId: string,
   source: string,
@@ -2619,30 +2626,19 @@ window.api.thread.onEvent((event) => {
       }
     }
 
-    // A turn landed on a still-unnamed node: name it from a one-shot Haiku turn
-    // in the background — a chat from its opening exchange, a note from its
-    // content. Until that returns the node shows a "…" placeholder; a user
-    // rename (before or during) always wins.
+    // A turn landed on a still-unnamed note: name it from a one-shot Haiku
+    // turn in the background, from its content. Until that returns the node
+    // shows a "…" placeholder; a user rename (before or during) always wins.
+    // (Chats are named at send time — see `send` — not here.)
     if (event.ok) {
       const node = useCanvasStore.getState().nodes.find((n) => n.id === event.nodeId)
-      if (node && !node.data.title) {
-        if (isChat(node) && node.data.kind !== 'research') {
-          const firstUser = node.data.messages.find((m) => m.role === 'user')
-          const reply = node.data.messages.find((m) => m.role === 'assistant' && m.text)
-          if (firstUser && reply?.text) {
-            const conversation =
-              `User: ${firstUser.text.slice(0, 1500)}\n\n` +
-              `Assistant: ${reply.text.slice(0, 1500)}`
-            generateTitle(event.nodeId, conversation, titleFromText(reply.text), false)
-          }
-        } else if (isNote(node) && node.data.content) {
-          generateTitle(
-            event.nodeId,
-            node.data.content.slice(0, 3000),
-            titleFromText(node.data.content),
-            true
-          )
-        }
+      if (node && !node.data.title && isNote(node) && node.data.content) {
+        generateTitle(
+          event.nodeId,
+          node.data.content.slice(0, 3000),
+          titleFromText(node.data.content),
+          true
+        )
       }
       // Output notes a chat writes via an output port receive their content
       // through note-content events but never a turn-complete of their own —
