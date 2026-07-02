@@ -2654,6 +2654,22 @@ app.whenReady().then(async () => {
     }
   })
 
+  // Web permissions in tabs: deny everything except harmless display modes.
+  // Electron GRANTS permission requests by default when no handler is set, so
+  // without this any page — including one a computer-use agent wanders into —
+  // could take geolocation, notifications, clipboard-read, even camera/mic,
+  // silently. Both handlers matter: the request handler gates prompts, the
+  // check handler gates the query/sync paths pages use to probe first.
+  {
+    const browsePermissionAllowed = (permission: string): boolean =>
+      permission === 'fullscreen' || permission === 'pointerLock'
+    const browse = session.fromPartition(BROWSE_PARTITION)
+    browse.setPermissionRequestHandler((_wc, permission, callback) => {
+      callback(browsePermissionAllowed(permission))
+    })
+    browse.setPermissionCheckHandler((_wc, permission) => browsePermissionAllowed(permission))
+  }
+
   loadDotEnv()
 
   // Decide auth before any SDK call: subscription token beats Settings API key
