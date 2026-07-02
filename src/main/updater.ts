@@ -88,20 +88,28 @@ export function initAutoUpdater(): void {
     // launchd, then terminates this process; ShipIt waits for us to die,
     // swaps the bundle in /Applications, and relaunches.
     //
-    // On macOS 26 the submitted job registers but launchd never actually
-    // starts it (`launchctl print` shows runs = 0; the staged update just
-    // sits there and the app "restarts" into the old version). ShipIt itself
-    // works — running it by hand installs perfectly — so leave behind a
-    // detached kicker that starts the job right after this process exits.
-    // Where launchd does start the job on its own, the kickstart is a no-op.
+    // Two macOS 26 failure modes, both observed here:
+    //  1. quitAndInstall's launchd job registers but never starts (runs = 0),
+    //     stranding the staged update.
+    //  2. quitAndInstall sometimes doesn't terminate this process — the window
+    //     closes but the process lingers, and if ShipIt runs while the app is
+    //     alive it (correctly) aborts the install.
+    // ShipIt itself installs perfectly once the app is dead and the job is
+    // started. So leave behind a detached kicker that waits for this process
+    // to exit (force-killing it if it lingers past a grace period), then
+    // starts the job. Where launchd behaves on its own, this is a no-op.
     //
-    // Do NOT app.exit() here as a "fallback": a hard exit races the launchd
+    // Do NOT app.exit() inline as a "fallback": a hard exit races the launchd
     // handoff and strands the install before the job is even submitted.
-    const kicker = spawn(
-      '/bin/sh',
-      ['-c', `sleep 2; /bin/launchctl kickstart gui/${process.getuid?.() ?? 501}/${SHIPIT_JOB}`],
-      { detached: true, stdio: 'ignore' }
-    )
+    const kickerScript = [
+      // wait up to 15s for the app process to exit on its own
+      `for i in $(seq 1 15); do kill -0 ${process.pid} 2>/dev/null || break; sleep 1; done`,
+      // ghost process: force it dead so ShipIt won't abort
+      `kill -9 ${process.pid} 2>/dev/null`,
+      'sleep 1',
+      `/bin/launchctl kickstart gui/${process.getuid?.() ?? 501}/${SHIPIT_JOB}`
+    ].join('; ')
+    const kicker = spawn('/bin/sh', ['-c', kickerScript], { detached: true, stdio: 'ignore' })
     kicker.unref()
     setImmediate(() => autoUpdater.quitAndInstall(false, true))
   })
