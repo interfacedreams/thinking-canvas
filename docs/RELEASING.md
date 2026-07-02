@@ -6,22 +6,22 @@ installs silently in the background.
 
 ## One-time setup
 
-You already have the Developer ID Application cert in your keychain
-(`Tommy Joseph (5BJ8XQLS2F)`). You need three more credentials, set as env vars:
+Signing requires a Developer ID Application certificate in the default
+keychain, plus four credentials set as env vars:
 
 | Var | What it is | How to get it |
 | --- | --- | --- |
 | `APPLE_ID` | Your Apple ID email | the account that owns the dev cert |
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for notarization | appleid.apple.com → Sign-In & Security → App-Specific Passwords |
-| `APPLE_TEAM_ID` | `5BJ8XQLS2F` | (your team id, already known) |
-| `GH_TOKEN` | GitHub token to upload the release | github.com → Settings → Developer settings → Fine-grained token with `Contents: read/write` on `interfacedreams/thinking-canvas` |
+| `APPLE_TEAM_ID` | Your Apple Developer Team ID | developer.apple.com → Membership details |
+| `GH_TOKEN` | GitHub token to upload the release | github.com → Settings → Developer settings → Fine-grained token with `Contents: read/write` on this repo |
 
 They live in the repo's `.env` (gitignored — never commit it):
 
 ```bash
 APPLE_ID="you@example.com"
 APPLE_APP_SPECIFIC_PASSWORD="abcd-efgh-ijkl-mnop"
-APPLE_TEAM_ID="5BJ8XQLS2F"
+APPLE_TEAM_ID="XXXXXXXXXX"
 GH_TOKEN="github_pat_..."
 ```
 

@@ -1151,13 +1151,13 @@ const BASE_APPEND =
   'This is a thinking canvas, not a code repository: you may pull in any relevant ' +
   "files from the memory index but otherwise don't explore the filesystem unless " +
   "explicitly asked. Also don't do any building or producing artifacts like HTML. " +
-  'Ordinary web search is fine: if the user asks you to "search", "look something ' +
-  'up", or find current information, just use WebSearch/WebFetch directly and answer. ' +
-  'Research mode is NOT selected for this request, so never run a deep research ' +
-  'workflow (spawning multiple researcher subagents to produce a long cited report) ' +
-  'on your own. Only when the user EXPLICITLY asks for "deep research" should you ' +
-  'first ask "Do you want me to run a deep research workflow for this?" and wait for ' +
-  'their answer. A plain request to search is not a request for deep research.'
+  'Web lookups: when the user asks you to "search", "look something up", or find ' +
+  'current information, use WebSearch/WebFetch directly and answer — that is normal, ' +
+  'not deep research. Deep research is a separate heavyweight workflow (multiple ' +
+  'researcher subagents producing a long cited report) behind a UI toggle, and the ' +
+  'toggle is OFF for this request: never start that workflow on your own. If the ' +
+  'message itself asks for "deep research", still confirm before starting — ask "Do ' +
+  'you want me to run a deep research workflow for this?" and wait for the answer.'
 
 const RESEARCH_APPEND =
   'Research mode is on for this request. Plan briefly, then spawn 2-3 researcher subagents IN PARALLEL ' +
