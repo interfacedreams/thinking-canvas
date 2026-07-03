@@ -40,6 +40,7 @@ import type { ChosenFile } from '@shared/types'
 import { CTX_HANDLE_ID, OUTPUT_HANDLE_ID } from '@renderer/features/nodes/shared/nodeChrome'
 import { paletteFor } from '@renderer/lib/palette'
 import { useSpawn } from '@renderer/features/canvas/useSpawn'
+import { useFocusGuard } from '@renderer/features/canvas/useFocusGuard'
 
 const nodeTypes: NodeTypes = {
   chat: ChatNodeView,
@@ -84,6 +85,8 @@ function pastedUrl(text: string): string | null {
 }
 
 function CanvasInner(): React.JSX.Element {
+  // Bounce non-user focus steals by driven tabs' webviews (see useFocusGuard).
+  useFocusGuard()
   const nodes = useCanvasStore((s) => s.nodes)
   const storeEdges = useCanvasStore((s) => s.edges)
   // Labels always float above every other resource. React Flow stacks by
@@ -91,7 +94,16 @@ function CanvasInner(): React.JSX.Element {
   // so labels get a base well above that ceiling while everything else keeps
   // its natural ordering.
   const layeredNodes = useMemo(
-    () => nodes.map((n) => (isLabel(n) ? { ...n, zIndex: 10000 } : n)),
+    () =>
+      nodes.map((n) =>
+        isLabel(n)
+          ? { ...n, zIndex: 10000 }
+          : // A driven tab floats above other nodes so its picture-in-picture
+            // dock (DrivenDock) isn't buried when it pins to the corner.
+            isLink(n) && n.data.driven
+            ? { ...n, zIndex: 9000 }
+            : n
+      ),
     [nodes]
   )
   const loaded = useCanvasStore((s) => s.loaded)

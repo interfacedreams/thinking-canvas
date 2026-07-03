@@ -1,4 +1,10 @@
-import { webContents, type WebContents } from 'electron'
+import {
+  webContents,
+  nativeImage,
+  BrowserWindow,
+  type WebContents,
+  type NativeImage
+} from 'electron'
 import {
   createSdkMcpServer,
   tool,
@@ -8,13 +14,24 @@ import { z } from 'zod'
 import type { ComputerTarget } from '../shared/types'
 
 // Computer use: an in-process MCP server (mcp__computer__computer) that lets a
-// chat turn drive one connected tab's <webview> guest — screenshots via
-// capturePage, input via sendInputEvent. Events are synthesized straight into
-// the guest's own coordinate space, so canvas zoom/pan and window focus don't
-// matter, no OS-level permissions are needed, and the user's real cursor is
-// never taken over. One tool with an `action` discriminator (not a tool per
-// action) because that is the shape Claude models are trained on for computer
-// use — they drive it far more reliably than a bespoke API.
+// chat turn drive one connected tab's <webview> guest. Mouse events are
+// synthesized via sendInputEvent straight into the guest's own coordinate
+// space (no focus needed); text goes in via document.execCommand('insertText')
+// (no focus needed either); key presses need browser-side focus, so they ride
+// a millisecond-scale focus juggle (withGuestFocus) that hands focus straight
+// back. The user's real cursor is never taken over, and the renderer's focus
+// guard (useFocusGuard) bounces the DOM-focus steal Chromium performs when a
+// synthesized click makes the guest request focus. A CDP attachment provides
+// focus emulation — the page *believes* it is focused while the user works
+// elsewhere — plus a screenshot fallback. Screenshots are
+// capturePage({stayHidden}); Blink only renders a guest where it intersects
+// the window (partial visibility crops captures, fully offscreen hangs them —
+// electron#29113), so whenever a driven tab isn't fully in view the renderer
+// counter-transforms its body into a bottom-right picture-in-picture grid
+// (DrivenDock) to keep it wholly painted. One tool with an
+// `action` discriminator (not a tool per action) because that is the shape
+// Claude models are trained on for computer use — they drive it far more
+// reliably than a bespoke API.
 //
 // Deliberately omitted from Anthropic's action set: `left_click_drag` (rare on
 // reading-heavy web tasks — revisit if slider/reorder/map tasks show up) and
@@ -34,6 +51,11 @@ const MAX_SHOT_LONG_EDGE = 2400
 // A hard ceiling on loadURL/settle waits — a hung page must not stall the turn.
 const LOAD_TIMEOUT_MS = 8000
 
+// How long the capturePage fast path gets before the CDP fallback takes over.
+// An offscreen (render-throttled) guest's capturePage may simply never
+// resolve, so this must be short enough not to drag every action.
+const CAPTURE_TIMEOUT_MS = 1500
+
 // Step cap: the runaway guard (there is no mid-turn stop button, and every
 // action costs a screenshot). Enforced in the tool rather than via the SDK's
 // maxTurns so the turn degrades gracefully — the model gets a wrap-up warning
@@ -44,6 +66,10 @@ const MAX_ACTIONS = 50
 const WARN_ACTIONS = 40
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** Resolve with the promise's value, or null on rejection/timeout. */
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T | null> =>
+  Promise.race([p.catch(() => null), sleep(ms).then(() => null)])
 
 // sendInputEvent key codes for the names the model uses. Anything not listed
 // passes through as-is (single characters, F-keys, …).
@@ -82,7 +108,79 @@ const MOD_ALIASES: Record<string, 'shift' | 'control' | 'alt' | 'meta'> = {
   meta: 'meta'
 }
 
-/** "cmd+a" / "Enter" / "ArrowDown" → keyDown/char/keyUp into the guest. */
+/** Run an input step that Chromium only delivers to the browser-side focused
+ *  widget (sendInputEvent keyboard). Focus the guest's webview ELEMENT, act,
+ *  then let the held focus guard hand focus back (computer:focusHold) — its
+ *  instant bounce would otherwise yank focus mid-juggle and drop the input in
+ *  flight. NEVER wc.focus()/host.focus() here: those can ACTIVATE the app and
+ *  steal the user's keyboard from other applications. CDP typing is NOT an
+ *  alternative either: keyboard routing to a guest requires real browser-side
+ *  focus, and CDP focus emulation does not override it (verified — events are
+ *  silently dropped). */
+async function withGuestFocus(wc: WebContents, act: () => void | Promise<void>): Promise<void> {
+  const host = wc.hostWebContents
+  const win = host ? BrowserWindow.fromWebContents(host) : null
+  // App in background (user is in another application): send with NO focus
+  // calls at all. Keyboard input delivers to the guest anyway — the focus
+  // gate only bites inside a focused window where another widget holds real
+  // focus — and wc.focus()/host.focus() would ACTIVATE the app window
+  // (Electron focuses the owner window on macOS/Linux to match Windows),
+  // yanking the user's keyboard out of whatever app they're using. Verified
+  // both ways in a two-window harness.
+  if (!win?.isFocused()) {
+    await act()
+    await sleep(60)
+    return
+  }
+  // In-app: route browser-side focus to the guest by focusing the <webview>
+  // ELEMENT in the embedder's DOM — never wc.focus()/host.focus(). Those hit
+  // NativeWindow::Focus, and when the frontmost app is one that yields
+  // activation (Claude Desktop, other Electron apps — Finder refuses, which
+  // hid this in early tests), macOS ACTIVATES this app and steals the user's
+  // keyboard mid-typing. Element focus is pure DOM: same key delivery
+  // (verified), zero activation (verified vs Claude Desktop). The held guard
+  // restores the user's element when released.
+  host?.send('computer:focusHold', true)
+  await sleep(15) // let the hold land in the renderer before the steal
+  try {
+    await host?.executeJavaScript(
+      `(() => {
+        const wv = [...document.querySelectorAll('webview')].find((w) => {
+          try { return w.getWebContentsId() === ${wc.id} } catch { return false }
+        })
+        if (wv) wv.focus()
+      })()`
+    )
+    await sleep(30) // let the focus land before the input rides it
+    await act()
+    await sleep(60) // let the input flush before focus moves away
+  } finally {
+    host?.send('computer:focusHold', false)
+  }
+}
+
+/** Type text as per-character key events into the guest's own widget. The
+ *  slow path behind execCommand — but the only typing fallback that
+ *  physically cannot escape the tab: key events target this webContents'
+ *  widget (delivered while it holds focus, dropped otherwise), unlike
+ *  webContents.insertText, which resolves "the focused element" across the
+ *  window's whole focus tree and once landed agent text in the user's chat
+ *  composer. Callers wrap this in withGuestFocus. */
+function typeChars(wc: WebContents, text: string): void {
+  for (const ch of text) {
+    if (ch === '\n' || ch === '\r') {
+      pressKey(wc, 'Enter')
+      continue
+    }
+    wc.sendInputEvent({ type: 'keyDown', keyCode: ch })
+    wc.sendInputEvent({ type: 'char', keyCode: ch })
+    wc.sendInputEvent({ type: 'keyUp', keyCode: ch })
+  }
+}
+
+/** "cmd+a" / "Enter" / "ArrowDown" → keyDown/char/keyUp into the guest.
+ *  Delivers only while the guest holds browser-side focus — wrap calls in
+ *  withGuestFocus. */
 function pressKey(wc: WebContents, combo: string): void {
   const parts = combo
     .split('+')
@@ -219,6 +317,70 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
     return wc && !wc.isDestroyed() ? wc : null
   }
 
+  // --- CDP attachment ------------------------------------------------------
+  // Two jobs: (1) Emulation.setFocusEmulationEnabled keeps the page believing
+  // it is focused while the user works elsewhere — the caret stays live, blur
+  // handlers don't fire, and execCommand typing keeps landing in the page's
+  // focused editable. (2) Page.captureScreenshot backs up capturePage.
+  // Re-checked every action: the attach survives across turns but drops on
+  // tab reload or if DevTools claims the guest.
+  let focusEmulated = false
+  const ensureCdp = async (wc: WebContents): Promise<boolean> => {
+    try {
+      if (!wc.debugger.isAttached()) {
+        wc.debugger.attach('1.3')
+        focusEmulated = false
+        wc.debugger.once('detach', () => {
+          focusEmulated = false
+        })
+      }
+      if (!focusEmulated) {
+        await wc.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
+        focusEmulated = true
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // True when the latest frame needed the CDP fallback — the tell that the
+  // tab's <webview> is scrolled offscreen and Blink is render-throttling it.
+  let capturedOffscreen = false
+
+  /** Raw frame grab. Fast path is capturePage with stayHidden (the capturer
+   *  count forces frame production for pages Chromium considers hidden). For
+   *  a guest render-throttled offscreen that can still hang or come back
+   *  empty (electron#29113), so it races a short timeout and falls back to a
+   *  CDP readback, which composites the throttled guest on demand. */
+  const grabFrame = async (wc: WebContents): Promise<NativeImage> => {
+    const fast = await withTimeout(
+      wc.capturePage(undefined, { stayHidden: true }),
+      CAPTURE_TIMEOUT_MS
+    )
+    if (fast && !fast.isEmpty()) {
+      capturedOffscreen = false
+      return fast
+    }
+    if (!(await ensureCdp(wc))) {
+      throw new Error(
+        'screenshot failed — the tab looks scrolled offscreen and the devtools fallback is ' +
+          'unavailable. Ask the user to pan the canvas until the tab is at least partly visible.'
+      )
+    }
+    const { data } = (await wc.debugger.sendCommand('Page.captureScreenshot', {
+      format: 'png'
+    })) as { data: string }
+    const img = nativeImage.createFromBuffer(Buffer.from(data, 'base64'))
+    if (img.isEmpty()) {
+      throw new Error(
+        'screenshot came back empty — ask the user to pan the canvas so the tab is visible.'
+      )
+    }
+    capturedOffscreen = true
+    return img
+  }
+
   const capture = async (
     wc: WebContents
   ): Promise<{ type: 'image'; data: string; mimeType: string }> => {
@@ -235,7 +397,7 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
     } catch {
       // page mid-navigation — fall back to the image's own size below
     }
-    const img = await wc.capturePage()
+    const img = await grabFrame(wc)
     const size = img.getSize()
     const scale = Math.min(
       1,
@@ -274,7 +436,9 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
     button: 'left' | 'right',
     clicks: number
   ): void => {
-    wc.focus()
+    // No wc.focus(): synthesized mouse events deliver regardless of focus,
+    // and the click still sets the guest's internal focused element — so the
+    // user's own input focus is never stolen.
     wc.sendInputEvent({ type: 'mouseMove', x, y })
     for (let i = 1; i <= clicks; i++) {
       wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: i })
@@ -351,6 +515,10 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
         }
       }
       try {
+        // Arm focus emulation from the first action so the page acts focused
+        // for the whole turn (failure is fine — type/key re-check and fall
+        // back to the legacy focus-stealing path).
+        await ensureCdp(wc)
         let desc = describeComputerAction(args as Record<string, unknown>)
         let quiet = 400
         switch (args.action) {
@@ -381,15 +549,26 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
           }
           case 'type': {
             if (!args.text) throw new Error('text is required for type')
-            wc.focus()
-            wc.insertText(args.text)
+            // execCommand inserts into the guest's internally-focused editable
+            // with no browser-side focus at all — the same event stream as an
+            // IME commit (beforeinput/input), so frameworks see it. When the
+            // guest has no focused editable it returns false; fall back to a
+            // focus juggle + per-character key events, which cannot land
+            // anywhere but this tab.
+            const text = args.text
+            const inserted = (await wc.executeJavaScript(
+              `document.execCommand('insertText', false, ${JSON.stringify(text)})`
+            )) as boolean
+            if (!inserted) {
+              await withGuestFocus(wc, () => typeChars(wc, text))
+            }
             quiet = 300
             break
           }
           case 'key': {
             if (!args.text) throw new Error('text is required for key')
-            wc.focus()
-            pressKey(wc, args.text)
+            const combo = args.text
+            await withGuestFocus(wc, () => pressKey(wc, combo))
             quiet = 500
             break
           }
@@ -443,13 +622,18 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
           actionsUsed >= WARN_ACTIONS
             ? `\nNOTE: ${actionsUsed} of ${MAX_ACTIONS} actions used this request — wrap up and report your findings.`
             : ''
+        const offscreen = capturedOffscreen
+          ? '\nNOTE: the tab is scrolled offscreen on the canvas (screenshot taken via fallback). ' +
+            'The page still works but may render/animate sluggishly; if it looks stale or stuck, ' +
+            'tell the user to pan the canvas so the tab is visible.'
+          : ''
         return {
           content: [
             {
               type: 'text' as const,
               text:
                 `${desc}. Current page: ${title ? `${JSON.stringify(title)} — ` : ''}${url}\n` +
-                `Screenshot (${lastShot!.pngW}x${lastShot!.pngH}):${warn}`
+                `Screenshot (${lastShot!.pngW}x${lastShot!.pngH}):${offscreen}${warn}`
             },
             shot
           ]

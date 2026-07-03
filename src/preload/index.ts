@@ -120,6 +120,14 @@ const api = {
       ipcRenderer.on('thread:event', (_e, payload: ThreadEvent) => cb(payload))
     }
   },
+  computer: {
+    // Fired around a computer-use focus juggle in main (see withGuestFocus):
+    // while held, the renderer's focus guard must not bounce focus away from
+    // the driven tab or the juggled input would be dropped mid-flight.
+    onFocusHold: (cb: (held: boolean) => void): void => {
+      ipcRenderer.on('computer:focusHold', (_e, held: boolean) => cb(held))
+    }
+  },
   updates: {
     // Fires while an opted-in update downloads; done=true when the bytes are in
     // (the restart prompt takes over from there).

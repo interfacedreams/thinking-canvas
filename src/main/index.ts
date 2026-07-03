@@ -2567,7 +2567,11 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => {
+  // once, NOT on: ready-to-show can re-fire after boot (renderer re-renders,
+  // e.g. following GPU-process hiccups), and show() on macOS ACTIVATES the
+  // app — a repeated handler here was yanking OS focus from other apps
+  // mid-computer-use-turn (found via stack trace on BrowserWindow.show).
+  mainWindow.once('ready-to-show', () => {
     mainWindow.show()
   })
 

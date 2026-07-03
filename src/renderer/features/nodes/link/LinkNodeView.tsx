@@ -1,9 +1,10 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Handle,
   NodeResizeControl,
   Position,
   ResizeControlVariant,
+  useReactFlow,
   type NodeProps
 } from '@xyflow/react'
 import { Brain, Minus, Plus, Trash2 } from 'lucide-react'
@@ -11,6 +12,8 @@ import { useCanvasStore, MAX_NODE_H, type LinkNode } from '@renderer/store/canva
 import { paletteFor } from '@renderer/lib/palette'
 import { usePanel } from '@renderer/features/nodes/shared/usePanel'
 import TabBrowser, { LinkSearch } from '@renderer/features/nodes/link/TabBrowser'
+import DrivenDock from '@renderer/features/nodes/link/DrivenDock'
+import { dockSlots } from '@renderer/features/nodes/link/dockSlots'
 import DockedStub from '@renderer/features/nodes/shared/DockedStub'
 import PanelChips from '@renderer/features/nodes/shared/PanelChips'
 import TransformButton from '@renderer/features/canvas/overlays/TransformButton'
@@ -46,8 +49,15 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
   // swallows it) and the canvas's connect listener can read this node's id.
   const shiftHeld = useCanvasStore((s) => s.shiftHeld)
   const { docked, mode, open, stubAction } = usePanel(id)
+  // The tab's body is pinned to the corner picture-in-picture grid while a
+  // computer-use turn drives it out of view (see DrivenDock).
+  const pipDocked = useSyncExternalStore(dockSlots.subscribe, () => dockSlots.index(id) >= 0)
+  const { fitView } = useReactFlow()
 
   const titleRef = useRef<HTMLInputElement>(null)
+  // The page body — DrivenDock counter-transforms it into view when a
+  // computer-use turn drives this tab while the node is scrolled offscreen.
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   const [editingTitle, setEditingTitle] = useState(false)
   if (data.minimized && editingTitle) setEditingTitle(false)
@@ -303,21 +313,39 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           <DockedStub onClick={stubAction} />
         ) : (
           // The body is the page (scroll, not drag) — only the header band
-          // moves the node, like chats and notes.
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-b-[13px]">
-            {!data.url ? (
-              <LinkSearch id={id} active={!data.minimized} />
-            ) : (
-              <TabBrowser id={id} url={data.url} focused={!!selected} />
+          // moves the node, like chats and notes. The outer div holds the
+          // body's layout box; the inner one is what DrivenDock counter-
+          // transforms into the corner, so — like the side-panel stub — the
+          // card keeps its full space (and every edge/placement anchored to
+          // it) while the live page is pinned elsewhere.
+          <div className="relative min-h-0 flex-1">
+            {pipDocked && (
+              <button
+                type="button"
+                onClick={() => void fitView({ nodes: [{ id }], duration: 300, padding: 0.2 })}
+                className="nodrag absolute inset-0 flex cursor-pointer items-center justify-center rounded-b-[13px]"
+              >
+                <span className="animate-pulse rounded-full bg-(--np-chip) px-4 py-1.5 text-[15px] text-(--np-deep)">
+                  Browsing in the corner — click to follow
+                </span>
+              </button>
             )}
-            {/* Shift-to-connect catch layer: only while Shift is held, and only
-                over a live page (the guest swallows clicks; LinkSearch is plain
-                host DOM and needs no help). Transparent, but its crosshair hints
-                that a click now wires this page to a chat. The canvas listener
-                resolves the click to this node via the wrapping .react-flow__node. */}
-            {shiftHeld && data.url && (
-              <div className="nodrag absolute inset-0 z-10 cursor-crosshair" />
-            )}
+            <div ref={bodyRef} className="relative h-full w-full overflow-hidden rounded-b-[13px]">
+              {!data.url ? (
+                <LinkSearch id={id} active={!data.minimized} />
+              ) : (
+                <TabBrowser id={id} url={data.url} focused={!!selected} />
+              )}
+              {data.driven && data.url && <DrivenDock id={id} bodyRef={bodyRef} />}
+              {/* Shift-to-connect catch layer: only while Shift is held, and only
+                  over a live page (the guest swallows clicks; LinkSearch is plain
+                  host DOM and needs no help). Transparent, but its crosshair hints
+                  that a click now wires this page to a chat. The canvas listener
+                  resolves the click to this node via the wrapping .react-flow__node. */}
+              {shiftHeld && data.url && (
+                <div className="nodrag absolute inset-0 z-10 cursor-crosshair" />
+              )}
+            </div>
           </div>
         ))}
     </div>
