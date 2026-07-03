@@ -13,17 +13,11 @@ import { useCanvasStore, isLink } from '@renderer/store/canvas'
 // 2. Safety net: a short poll for steals with no focusout at all (nothing was
 //    focused beforehand, or the guest re-stole between events).
 //
-// Hold: key presses (and fallback typing) DO need the guest to hold browser-
-// side focus for a few dozen milliseconds — main juggles focus for them (see
-// withGuestFocus in main/computerUse.ts) and brackets the juggle with
-// computer:focusHold events so the guard doesn't yank focus mid-input. On
-// release the guard restores whatever the user had.
+// No input path needs the guard to stand down: agent keys reach the guest via
+// sendInputEvent, which targets the guest's own widget regardless of real
+// browser-side focus (see main/computerUse.ts), so the guard may bounce every
+// steal unconditionally.
 const POLL_MS = 50
-
-// The preload channel is a bare ipcRenderer.on with no way to unsubscribe, so
-// register once per window, not once per mount.
-let holdListenerBound = false
-let held = false
 
 export function useFocusGuard(): void {
   useEffect(() => {
@@ -32,9 +26,7 @@ export function useFocusGuard(): void {
       const nodeId = el.closest('.react-flow__node')?.getAttribute('data-id')
       return (
         !!nodeId &&
-        useCanvasStore
-          .getState()
-          .nodes.some((n) => n.id === nodeId && isLink(n) && n.data.driven)
+        useCanvasStore.getState().nodes.some((n) => n.id === nodeId && isLink(n) && n.data.driven)
       )
     }
 
@@ -46,7 +38,6 @@ export function useFocusGuard(): void {
 
     // If a driven webview holds focus, give it back to `to` (or drop it).
     const restore = (to: Element | null): void => {
-      if (held) return
       // App inactive (user is in another application): there is no caret here
       // to protect, and calling focus() in an inactive window asks macOS to
       // ACTIVATE the app — the cross-app focus steal. Stand down; the window
@@ -66,15 +57,6 @@ export function useFocusGuard(): void {
       }
     }
 
-    if (!holdListenerBound) {
-      holdListenerBound = true
-      window.api.computer.onFocusHold((h) => {
-        held = h
-        // The juggle is over — the steal it needed is no longer welcome.
-        if (!h) window.setTimeout(() => restore(lastGood), 0)
-      })
-    }
-
     const onFocusOut = (e: FocusEvent): void => {
       const from = e.target instanceof Element ? e.target : null
       if (from && from.tagName !== 'WEBVIEW') lastGood = from
@@ -91,7 +73,6 @@ export function useFocusGuard(): void {
 
     let prev: Element | null = document.activeElement
     const timer = window.setInterval(() => {
-      if (held) return
       const a = document.activeElement
       // App inactive: accept whatever focus state exists (nothing to protect,
       // and restore() would refuse anyway) instead of re-detecting the same

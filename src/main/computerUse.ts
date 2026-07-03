@@ -1,10 +1,4 @@
-import {
-  webContents,
-  nativeImage,
-  BrowserWindow,
-  type WebContents,
-  type NativeImage
-} from 'electron'
+import { webContents, nativeImage, type WebContents, type NativeImage } from 'electron'
 import {
   createSdkMcpServer,
   tool,
@@ -17,10 +11,13 @@ import type { ComputerTarget } from '../shared/types'
 // chat turn drive one connected tab's <webview> guest. Mouse events are
 // synthesized via sendInputEvent straight into the guest's own coordinate
 // space (no focus needed); text goes in via document.execCommand('insertText')
-// (no focus needed either); key presses need browser-side focus, so they ride
-// a millisecond-scale focus juggle (withGuestFocus) that hands focus straight
-// back. The user's real cursor is never taken over, and the renderer's focus
-// guard (useFocusGuard) bounces the DOM-focus steal Chromium performs when a
+// (no focus needed either); keys go in via sendInputEvent keyboard events,
+// which route to the guest's OWN render widget regardless of which element —
+// or window — holds real browser-side focus (verified in a host-textarea-vs-
+// guest harness: delivered with focus emulation on or off, zero leakage into
+// the focused host element). So no input path ever moves the user's focus.
+// The renderer's focus guard (useFocusGuard) bounces the
+// DOM-focus steal Chromium performs when a
 // synthesized click makes the guest request focus. A CDP attachment provides
 // focus emulation — the page *believes* it is focused while the user works
 // elsewhere — plus a screenshot fallback. Screenshots are
@@ -108,64 +105,13 @@ const MOD_ALIASES: Record<string, 'shift' | 'control' | 'alt' | 'meta'> = {
   meta: 'meta'
 }
 
-/** Run an input step that Chromium only delivers to the browser-side focused
- *  widget (sendInputEvent keyboard). Focus the guest's webview ELEMENT, act,
- *  then let the held focus guard hand focus back (computer:focusHold) — its
- *  instant bounce would otherwise yank focus mid-juggle and drop the input in
- *  flight. NEVER wc.focus()/host.focus() here: those can ACTIVATE the app and
- *  steal the user's keyboard from other applications. CDP typing is NOT an
- *  alternative either: keyboard routing to a guest requires real browser-side
- *  focus, and CDP focus emulation does not override it (verified — events are
- *  silently dropped). */
-async function withGuestFocus(wc: WebContents, act: () => void | Promise<void>): Promise<void> {
-  const host = wc.hostWebContents
-  const win = host ? BrowserWindow.fromWebContents(host) : null
-  // App in background (user is in another application): send with NO focus
-  // calls at all. Keyboard input delivers to the guest anyway — the focus
-  // gate only bites inside a focused window where another widget holds real
-  // focus — and wc.focus()/host.focus() would ACTIVATE the app window
-  // (Electron focuses the owner window on macOS/Linux to match Windows),
-  // yanking the user's keyboard out of whatever app they're using. Verified
-  // both ways in a two-window harness.
-  if (!win?.isFocused()) {
-    await act()
-    await sleep(60)
-    return
-  }
-  // In-app: route browser-side focus to the guest by focusing the <webview>
-  // ELEMENT in the embedder's DOM — never wc.focus()/host.focus(). Those hit
-  // NativeWindow::Focus, and when the frontmost app is one that yields
-  // activation (Claude Desktop, other Electron apps — Finder refuses, which
-  // hid this in early tests), macOS ACTIVATES this app and steals the user's
-  // keyboard mid-typing. Element focus is pure DOM: same key delivery
-  // (verified), zero activation (verified vs Claude Desktop). The held guard
-  // restores the user's element when released.
-  host?.send('computer:focusHold', true)
-  await sleep(15) // let the hold land in the renderer before the steal
-  try {
-    await host?.executeJavaScript(
-      `(() => {
-        const wv = [...document.querySelectorAll('webview')].find((w) => {
-          try { return w.getWebContentsId() === ${wc.id} } catch { return false }
-        })
-        if (wv) wv.focus()
-      })()`
-    )
-    await sleep(30) // let the focus land before the input rides it
-    await act()
-    await sleep(60) // let the input flush before focus moves away
-  } finally {
-    host?.send('computer:focusHold', false)
-  }
-}
-
 /** Type text as per-character key events into the guest's own widget. The
  *  slow path behind execCommand — but the only typing fallback that
- *  physically cannot escape the tab: key events target this webContents'
- *  widget (delivered while it holds focus, dropped otherwise), unlike
- *  webContents.insertText, which resolves "the focused element" across the
- *  window's whole focus tree and once landed agent text in the user's chat
- *  composer. Callers wrap this in withGuestFocus. */
+ *  physically cannot escape the tab: sendInputEvent keyboard events target
+ *  this webContents' widget no matter what holds real browser-side focus,
+ *  unlike webContents.insertText, which resolves "the focused element" across
+ *  the window's whole focus tree and once landed agent text in the user's
+ *  chat composer. */
 function typeChars(wc: WebContents, text: string): void {
   for (const ch of text) {
     if (ch === '\n' || ch === '\r') {
@@ -179,8 +125,12 @@ function typeChars(wc: WebContents, text: string): void {
 }
 
 /** "cmd+a" / "Enter" / "ArrowDown" → keyDown/char/keyUp into the guest.
- *  Delivers only while the guest holds browser-side focus — wrap calls in
- *  withGuestFocus. */
+ *  sendInputEvent delivers to the guest's own widget with NO browser-side
+ *  focus at all — verified with the host composer focused, window focused,
+ *  focus emulation on and off. Never "upgrade" this to CDP
+ *  Input.dispatchKeyEvent: that routes through the window's input router to
+ *  the FOCUSED widget (verified — it typed into the host textarea), i.e. it
+ *  would land agent keys in whatever the user is editing. */
 function pressKey(wc: WebContents, combo: string): void {
   const parts = combo
     .split('+')
@@ -556,23 +506,22 @@ export function createComputerServer(target: ComputerTarget): McpSdkServerConfig
             // execCommand inserts into the guest's internally-focused editable
             // with no browser-side focus at all — the same event stream as an
             // IME commit (beforeinput/input), so frameworks see it. When the
-            // guest has no focused editable it returns false; fall back to a
-            // focus juggle + per-character key events, which cannot land
-            // anywhere but this tab.
+            // guest has no focused editable it returns false; fall back to
+            // per-character key events, which cannot land anywhere but this
+            // tab.
             const text = args.text
             const inserted = (await wc.executeJavaScript(
               `document.execCommand('insertText', false, ${JSON.stringify(text)})`
             )) as boolean
             if (!inserted) {
-              await withGuestFocus(wc, () => typeChars(wc, text))
+              typeChars(wc, text)
             }
             quiet = 300
             break
           }
           case 'key': {
             if (!args.text) throw new Error('text is required for key')
-            const combo = args.text
-            await withGuestFocus(wc, () => pressKey(wc, combo))
+            pressKey(wc, args.text)
             quiet = 500
             break
           }

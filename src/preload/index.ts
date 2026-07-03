@@ -98,8 +98,7 @@ const api = {
       payload: { title?: string; transcript: string }
     ): Promise<boolean> => ipcRenderer.invoke('chat:clipMemory', nodeId, payload),
     // Remove a chat's transcript clip — on unpin or delete.
-    unclipMemory: (nodeId: string): Promise<void> =>
-      ipcRenderer.invoke('chat:unclipMemory', nodeId)
+    unclipMemory: (nodeId: string): Promise<void> => ipcRenderer.invoke('chat:unclipMemory', nodeId)
   },
   thread: {
     send: (args: ThreadSendArgs): Promise<void> => ipcRenderer.invoke('thread:send', args),
@@ -110,14 +109,6 @@ const api = {
     },
     onEvent: (cb: (event: ThreadEvent) => void): void => {
       ipcRenderer.on('thread:event', (_e, payload: ThreadEvent) => cb(payload))
-    }
-  },
-  computer: {
-    // Fired around a computer-use focus juggle in main (see withGuestFocus):
-    // while held, the renderer's focus guard must not bounce focus away from
-    // the driven tab or the juggled input would be dropped mid-flight.
-    onFocusHold: (cb: (held: boolean) => void): void => {
-      ipcRenderer.on('computer:focusHold', (_e, held: boolean) => cb(held))
     }
   },
   updates: {
