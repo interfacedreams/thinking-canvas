@@ -300,6 +300,10 @@ export function computerAppend(target: ComputerTarget): string {
     'never post, submit, buy, or send anything on the user’s behalf unless they explicitly ' +
     'asked for exactly that. If a login wall appears, stop and ask the user to log in ' +
     'manually in the tab, then continue once they say so.\n' +
+    '- Keep track of the URL of each page that backs a finding (note it when you navigate ' +
+    'or after clicking through), and when applicable cite those pages in your reply as ' +
+    'markdown links — e.g. the exact listing, product page, or article — so the user can ' +
+    'click through and verify instead of taking your word for it.\n' +
     'Work autonomously until the task is done, then summarize what you found.'
   )
 }

@@ -77,7 +77,7 @@ function MessageView({
   return (
     <div data-msg={message.id} className="prose-chat mb-2 px-3 py-1">
       <Markdown
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
         rehypePlugins={[rehypeKatex]}
         components={markdownComponents}
       >

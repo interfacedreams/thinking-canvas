@@ -104,7 +104,7 @@ export default function NoteBody({
             {viewed.content ? (
               <MarkdownSourceContext.Provider value={id}>
                 <Markdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
+                  remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
                   rehypePlugins={[rehypeKatex]}
                   components={markdownComponents}
                 >
