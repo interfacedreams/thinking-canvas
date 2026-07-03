@@ -24,7 +24,10 @@ import {
   moveNoteFile,
   noteFiles,
   notePathFor,
-  readNoteVersions
+  noteSync,
+  readNoteVersions,
+  startNoteWatcher,
+  stopNoteWatcher
 } from './notes'
 import { fileMimeFor, imageDataUrl } from './files'
 
@@ -145,6 +148,8 @@ export async function autoPlaceTopLevel(root: string, doc: CanvasDoc): Promise<v
       const id = autoId('note', name)
       if (doc.nodes.some((n) => n.id === id)) continue
       noteFiles.set(id, name)
+      const content = await readTextIfExists(join(root, name))
+      noteSync.set(id, content)
       doc.nodes.push({
         id,
         kind: 'note',
@@ -152,7 +157,7 @@ export async function autoPlaceTopLevel(root: string, doc: CanvasDoc): Promise<v
         width: 380,
         title: name.replace(/\.md$/i, ''),
         file: name,
-        content: await readTextIfExists(join(root, name)),
+        content,
         noteVersions: await readNoteVersions(root, id)
       })
       continue
@@ -174,10 +179,12 @@ export async function autoPlaceTopLevel(root: string, doc: CanvasDoc): Promise<v
 }
 
 export function registerCanvasIpc(): void {
-  ipcMain.handle('canvas:load', async (): Promise<CanvasDoc | null> => {
+  ipcMain.handle('canvas:load', async (event): Promise<CanvasDoc | null> => {
+    stopNoteWatcher() // restarted below once the doc is hydrated
     const root = getFolderRoot()
     if (!root) return null
     noteFiles.clear()
+    noteSync.clear()
     // The CLAUDE.md node is always present and always backed by the root file,
     // whatever canvas.json says — map it before the migration loop, and inject
     // the node for canvases that predate the feature (its body hydrates below).
@@ -253,6 +260,7 @@ export function registerCanvasIpc(): void {
           if (node.kind === 'note') {
             const path = notePathFor(root, node.id)
             node.content = path ? await readTextIfExists(path) : ''
+            noteSync.set(node.id, node.content)
             node.noteVersions = await readNoteVersions(root, node.id)
             if (node.updatedAt == null && path) node.updatedAt = await mtimeOf(path)
             return
@@ -271,6 +279,7 @@ export function registerCanvasIpc(): void {
         })
       )
       await autoPlaceTopLevel(root, doc)
+      startNoteWatcher(root, event.sender)
       return doc
     } catch {
       return null

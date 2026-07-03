@@ -123,12 +123,23 @@ window.api.thread.onEvent((event) => {
         : {}
     )
   } else if (event.type === 'note-external-edit') {
-    // A chat just edited this note's file. If the user has unsaved edits in it
-    // (a pending autosave), park the new content behind a "Reload" prompt
-    // instead of clobbering their work; otherwise adopt it and refresh history.
+    // Something edited this note's file behind the card — a chat turn, or any
+    // on-disk change the main process's folder watcher spotted. If the user
+    // has unsaved edits in it (a pending autosave), park the new content
+    // behind a "Reload" prompt instead of clobbering their work; otherwise
+    // adopt it and refresh history.
     const store = useCanvasStore.getState()
     const node = store.nodes.find((n) => n.id === event.nodeId)
     if (!node || !isNote(node)) return
+    // Disk already matches the card (the watcher echoing a write the app made
+    // itself): nothing to adopt — at most take the refreshed history.
+    if (event.content === node.data.content && !node.data.externalEdit) {
+      if (event.versions) {
+        const versions = event.versions
+        patch(event.nodeId, () => ({ versions }))
+      }
+      return
+    }
     if (noteSaveTimers.has(event.nodeId) || node.data.status === 'streaming') {
       patch(event.nodeId, () => ({ externalEdit: { content: event.content } }))
     } else {

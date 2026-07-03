@@ -1,7 +1,9 @@
 import { ipcMain } from 'electron'
-import { promises as fs } from 'fs'
+import type { WebContents } from 'electron'
+import { promises as fs, watch } from 'fs'
+import type { FSWatcher } from 'fs'
 import { join, resolve } from 'path'
-import type { NoteDoc, NoteVersion } from '../shared/types'
+import type { NoteDoc, NoteVersion, ThreadEvent } from '../shared/types'
 import {
   CLAUDE_MD_FILE,
   CLAUDE_MD_ID,
@@ -37,6 +39,90 @@ export const noteIdForPath = (root: string, absPath: string): string | null => {
     if (resolve(root, file) === absPath) return id
   }
   return null
+}
+
+// --- Note disk sync -------------------------------------------------------
+// A note card hydrates from its file at canvas:load and then only hears about
+// edits made through the app itself (its own editor, a chat's mirror/settle
+// passes). Anything else that touches a mapped note file — an external
+// editor, a script, an agent writing outside the app's own channels — used to
+// leave the card silently stale until the folder was reopened. Watch the
+// folder root (every note file lives there, CLAUDE.md included) and push
+// drifted content through the guarded note-external-edit channel, which the
+// renderer already parks behind a Reload prompt when the card has unsaved
+// edits.
+//
+// noteSync holds, per node id, the content the renderer is known to hold —
+// updated wherever content crosses the IPC boundary — so the app's own writes
+// (autosave, restore, settle) never echo back as external edits. No versions
+// are cut here: history stays a turn-boundary affair (snapshotNote), which
+// reads the live file and so picks up external content at the next boundary.
+export const noteSync = new Map<string, string>()
+
+// Notes owned by a running turn (a note session's own file, wired output
+// notes): their updates flow through the turn's mirror/settle emits, so the
+// watcher stays out of the way until the turn releases them. Ref-counted —
+// concurrent turns can share a wired note.
+const activeTurnNotes = new Map<string, number>()
+export const claimTurnNote = (nodeId: string): void => {
+  activeTurnNotes.set(nodeId, (activeTurnNotes.get(nodeId) ?? 0) + 1)
+}
+export const releaseTurnNote = (nodeId: string): void => {
+  const n = activeTurnNotes.get(nodeId) ?? 0
+  if (n <= 1) activeTurnNotes.delete(nodeId)
+  else activeTurnNotes.set(nodeId, n - 1)
+}
+
+let noteWatcher: FSWatcher | null = null
+let noteWatcherWc: WebContents | null = null
+// Editors save in bursts (and atomically, via a temp-file rename) — coalesce
+// events per filename before reading.
+const noteWatchTimers = new Map<string, NodeJS.Timeout>()
+
+export function stopNoteWatcher(): void {
+  noteWatcher?.close()
+  noteWatcher = null
+  noteWatcherWc = null
+  for (const t of noteWatchTimers.values()) clearTimeout(t)
+  noteWatchTimers.clear()
+}
+
+export function startNoteWatcher(root: string, wc: WebContents): void {
+  stopNoteWatcher()
+  noteWatcherWc = wc
+  try {
+    noteWatcher = watch(root, { persistent: false }, (_type, filename) => {
+      if (typeof filename !== 'string' || !filename.endsWith('.md')) return
+      clearTimeout(noteWatchTimers.get(filename))
+      noteWatchTimers.set(
+        filename,
+        setTimeout(() => {
+          noteWatchTimers.delete(filename)
+          void syncNoteFromDisk(root, filename)
+        }, 200)
+      )
+    })
+    noteWatcher.on('error', stopNoteWatcher)
+  } catch {
+    noteWatcher = null // watch unavailable — cards keep their load-time content
+  }
+}
+
+async function syncNoteFromDisk(root: string, filename: string): Promise<void> {
+  if (root !== getFolderRoot() || !noteWatcherWc || noteWatcherWc.isDestroyed()) return
+  let nodeId: string | null = null
+  for (const [id, file] of noteFiles) {
+    if (file === filename) {
+      nodeId = id
+      break
+    }
+  }
+  if (!nodeId || activeTurnNotes.has(nodeId)) return
+  const content = await readTextIfExists(join(root, filename))
+  if (content === noteSync.get(nodeId)) return
+  noteSync.set(nodeId, content)
+  const payload: ThreadEvent = { nodeId, type: 'note-external-edit', content }
+  noteWatcherWc.send('thread:event', payload)
 }
 
 /**
@@ -173,6 +259,7 @@ export function registerNoteIpc(): void {
     }
     const slot = await createNoteFile(root, 'Untitled')
     noteFiles.set(nodeId, slot.file)
+    noteSync.set(nodeId, '')
   })
 
   // Title committed — rename the file to match. Returns the title actually
@@ -201,7 +288,9 @@ export function registerNoteIpc(): void {
   ipcMain.handle('note:save', async (_event, nodeId: string, content: string): Promise<void> => {
     const root = getFolderRoot()
     const path = root && isSafeNodeId(nodeId) ? notePathFor(root, nodeId) : null
-    if (path) await fs.writeFile(path, content)
+    if (!path) return
+    noteSync.set(nodeId, content) // before the write: the watcher must not echo it
+    await fs.writeFile(path, content)
   })
 
   // The generated project memory index, for the Memory legend's read-only
@@ -227,6 +316,7 @@ export function registerNoteIpc(): void {
       const versions = await snapshotNote(root, nodeId, 'user')
       const target = versions[index]
       if (!target) return null
+      noteSync.set(nodeId, target.content)
       await fs.writeFile(path, target.content)
       return { content: target.content, versions }
     }
@@ -237,6 +327,7 @@ export function registerNoteIpc(): void {
     if (!root || !isSafeNodeId(nodeId) || nodeId === CLAUDE_MD_ID) return // never unlink CLAUDE.md
     const path = notePathFor(root, nodeId)
     noteFiles.delete(nodeId)
+    noteSync.delete(nodeId)
     const doomed = [
       ...(path ? [path] : []),
       legacyNoteFileFor(root, nodeId), // pre-migration leftovers, if any

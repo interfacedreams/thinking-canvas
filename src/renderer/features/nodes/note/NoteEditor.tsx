@@ -9,13 +9,12 @@ import { Placeholder } from '@tiptap/extensions'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import 'katex/dist/katex.min.css'
 
-// Serialize hard breaks as backslash breaks ("\<newline>", CommonMark's other
-// hard-break syntax) instead of the default trailing double-space. That keeps
-// the two syntaxes distinguishable in note files: "\<newline>" is deliberate
-// in-app structure (Shift+Enter, pasted lines), while trailing double-spaces
-// are how AI turns hard-wrap prose at ~80 cols — which setMarkdown demotes.
-const BackslashHardBreak = HardBreak.extend({
-  renderMarkdown: () => '\\\n'
+// Serialize hard breaks as plain newlines instead of the default trailing
+// double-space. hardenSoftBreaks (below) parses every newline back into a
+// hardBreak, so the round trip is lossless — and note files keep the exact
+// line structure an external editor would write, no "\" or "  " markers.
+const NewlineHardBreak = HardBreak.extend({
+  renderMarkdown: () => '\n'
 })
 
 // StarterKit's heading input rule (`^#{1,6}\s`) only fires at the true start of
@@ -57,39 +56,31 @@ const HeadingAfterBreak = Extension.create({
 })
 
 // marked (under @tiptap/markdown) keeps soft breaks as literal "\n" inside
-// text tokens, and TipTap renders with white-space: pre-wrap — so AI-written
-// markdown hard-wrapped at ~80 cols would show its wrap seams as real line
-// breaks. Flatten them to spaces post-parse; deliberate structure is safe
-// because hard breaks are separate hardBreak nodes and code blocks keep
-// their newlines. parse() returns fresh JSON, so mutating is fine.
-function reflowSoftBreaks(node: JSONContent): JSONContent {
+// text tokens, and CommonMark would have them render as spaces. But a newline
+// in a note file is a line its author typed — external editors above all, now
+// that files sync in from disk live — so promote each one to a real hardBreak
+// node post-parse. Post-parse keeps this safe: block structure (headings,
+// lists) is already settled, and code blocks keep their bytes verbatim.
+// parse() returns fresh JSON, so mutating is fine.
+function hardenSoftBreaks(node: JSONContent): JSONContent {
   if (node.type === 'codeBlock') return node
-  if (typeof node.text === 'string') node.text = node.text.replace(/\n/g, ' ')
-  node.content?.forEach(reflowSoftBreaks)
+  if (node.content) {
+    node.content = node.content.flatMap((child) => {
+      if (child.type === 'text' && typeof child.text === 'string' && child.text.includes('\n')) {
+        return child.text.split('\n').flatMap((line, i) => {
+          const seg: JSONContent[] = i > 0 ? [{ type: 'hardBreak' }] : []
+          if (line) seg.push({ ...child, text: line }) // marks ride along
+          return seg
+        })
+      }
+      return [hardenSoftBreaks(child)]
+    })
+  }
   return node
 }
 
-// Trailing double-spaces are markdown hard breaks — but in files they come
-// from AI turns hard-wrapping prose at ~80 cols, freezing the wrap seams at
-// whatever width the model picked. Demote them to soft breaks pre-parse so
-// reflowSoftBreaks flattens them. Deliberate in-app breaks are unaffected:
-// BackslashHardBreak serializes those as "\<newline>". Fenced code keeps its
-// bytes.
-function demoteTrailingSpaceBreaks(markdown: string): string {
-  let inFence = false
-  return markdown
-    .split('\n')
-    .map((line) => {
-      if (/^\s*(```|~~~)/.test(line)) inFence = !inFence
-      return inFence ? line : line.replace(/ {2,}$/, '')
-    })
-    .join('\n')
-}
-
 function setMarkdown(editor: Editor, markdown: string): void {
-  const content = editor.markdown
-    ? reflowSoftBreaks(editor.markdown.parse(demoteTrailingSpaceBreaks(markdown)))
-    : markdown
+  const content = editor.markdown ? hardenSoftBreaks(editor.markdown.parse(markdown)) : markdown
   editor.commands.setContent(content, { emitUpdate: false })
 }
 
@@ -131,9 +122,9 @@ function NoteEditor({
       StarterKit.configure({
         // plain click places the cursor; ⌘-click (below) opens the link
         link: { openOnClick: false },
-        hardBreak: false // replaced by BackslashHardBreak
+        hardBreak: false // replaced by NewlineHardBreak
       }),
-      BackslashHardBreak,
+      NewlineHardBreak,
       HeadingAfterBreak,
       // KaTeX rendering for `$…$` (inline) and `$$…$$` (block) math. Both
       // carry markdown tokenizers/serializers, so the `$`-delimited LaTeX the
@@ -144,9 +135,8 @@ function NoteEditor({
       Placeholder.configure({ placeholder: 'Write a note…' })
     ],
     // Initial content goes through setMarkdown (not the content option) so
-    // soft breaks reflow with the note width. Deliberate line structure
-    // still survives as backslash hard breaks ("\<newline>"), which pastes
-    // (below) and our own serializer emit.
+    // every newline in the file — soft break or hard — lands as a visible
+    // line break in the card, matching what an external editor shows.
     onCreate: ({ editor }) => setMarkdown(editor, content),
     editable: !readOnly,
     onUpdate: ({ editor }) => onChangeRef.current(editor.getMarkdown()),
@@ -186,7 +176,12 @@ function NoteEditor({
   }, [editor, content])
 
   useEffect(() => {
-    editor?.setEditable(!readOnly)
+    // emitUpdate: false — setEditable fires onUpdate by default, which would
+    // serialize the just-parsed doc back through onChange and autosave a
+    // reflowed copy of every note at mount (rewriting every note file on
+    // every boot, and clobbering the line structure of externally edited
+    // files). Only real user edits should reach onChange.
+    editor?.setEditable(!readOnly, false)
   }, [editor, readOnly])
 
   return (

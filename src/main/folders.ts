@@ -3,7 +3,7 @@ import { promises as fs } from 'fs'
 import { basename, join } from 'path'
 import type { CanvasDoc, FolderState } from '../shared/types'
 import { canvasFileFor, dirExists, getFolderRoot, sanitizeTitle, setFolderRoot } from './paths'
-import { noteFiles } from './notes'
+import { noteFiles, noteSync, stopNoteWatcher } from './notes'
 
 export interface FolderSettings {
   current: string | null
@@ -98,7 +98,9 @@ export async function buildFolderState(): Promise<FolderState> {
 
 export async function setCurrentFolder(root: string): Promise<FolderState> {
   setFolderRoot(root)
+  stopNoteWatcher() // restarted by the next canvas:load
   noteFiles.clear() // rebuilt by the next canvas:load
+  noteSync.clear()
   const settings = await readSettings()
   settings.current = root
   settings.recents = [root, ...settings.recents.filter((r) => r !== root)].slice(0, 20)

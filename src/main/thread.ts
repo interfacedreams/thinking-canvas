@@ -33,7 +33,15 @@ import {
   memoryFileFor,
   readTextIfExists
 } from './paths'
-import { noteFiles, noteIdForPath, notePathFor, snapshotNote } from './notes'
+import {
+  claimTurnNote,
+  noteFiles,
+  noteIdForPath,
+  notePathFor,
+  noteSync,
+  releaseTurnNote,
+  snapshotNote
+} from './notes'
 import { MAX_PDF_BYTES, fileMimeFor, isHttpUrl, originOf } from './files'
 import type { ImageMime, PdfMime } from './files'
 import { authStatus } from './auth'
@@ -361,6 +369,14 @@ export function registerThreadIpc(): void {
         before: string
         mirrored: string
       }[] = []
+      // Notes this turn owns (its own note, wired outputs) — claimed so the
+      // disk watcher defers to the turn's mirror/settle emits, released in the
+      // finally below.
+      const claimedNotes: string[] = []
+      const claimNote = (id: string): void => {
+        claimTurnNote(id)
+        claimedNotes.push(id)
+      }
       // The turn is the version boundary for output notes too: any whose file
       // the agent changed becomes one 'ai' version, with its settled content
       // and fresh history mirrored to the note node. Idempotent — an unchanged
@@ -371,6 +387,7 @@ export function registerThreadIpc(): void {
           const content = await readTextIfExists(t.path)
           if (content !== t.before) {
             const versions = await snapshotNote(root, t.id, 'ai')
+            noteSync.set(t.id, content)
             emit({ nodeId: t.id, type: 'note-content', content, versions })
           }
         }
@@ -400,6 +417,7 @@ export function registerThreadIpc(): void {
           const content = await readTextIfExists(t.path)
           if (content !== t.before) {
             const versions = await snapshotNote(root, id, 'ai')
+            noteSync.set(id, content)
             emit({ nodeId: id, type: 'note-external-edit', content, versions })
           }
         }
@@ -407,6 +425,7 @@ export function registerThreadIpc(): void {
 
       try {
         if (notePath) {
+          claimNote(nodeId)
           // The Edit tool needs a file to edit — make sure it exists.
           try {
             await fs.access(notePath)
@@ -425,6 +444,7 @@ export function registerThreadIpc(): void {
           if (!isSafeNodeId(n.id)) continue
           const path = notePathFor(root, n.id)
           if (!path) continue
+          claimNote(n.id)
           try {
             await fs.access(path)
           } catch {
@@ -885,6 +905,7 @@ export function registerThreadIpc(): void {
               const content = await readTextIfExists(notePath)
               if (content !== mirroredNote) {
                 mirroredNote = content
+                noteSync.set(nodeId, content)
                 emit({ nodeId, type: 'note-content', content })
               }
             }
@@ -892,6 +913,7 @@ export function registerThreadIpc(): void {
               const content = await readTextIfExists(t.path)
               if (content !== t.mirrored) {
                 t.mirrored = content
+                noteSync.set(t.id, content)
                 emit({ nodeId: t.id, type: 'note-content', content })
               }
             }
@@ -993,8 +1015,10 @@ export function registerThreadIpc(): void {
               // settled file becomes one 'ai' version.
               const versions = await snapshotNote(root, nodeId, 'ai')
               note = { content: await readTextIfExists(notePath), versions }
+              noteSync.set(nodeId, note.content)
             }
             await settleOutputNotes()
+            await settleGardenedNotes()
             emit({
               nodeId,
               type: 'done',
@@ -1019,10 +1043,13 @@ export function registerThreadIpc(): void {
         if (notePath) {
           const versions = await snapshotNote(root, nodeId, 'ai')
           note = { content: await readTextIfExists(notePath), versions }
+          noteSync.set(nodeId, note.content)
         }
         await settleOutputNotes()
         await settleGardenedNotes()
         emit({ nodeId, type: 'done', ok: false, error: String(err), ...(note ? { note } : {}) })
+      } finally {
+        claimedNotes.forEach(releaseTurnNote)
       }
     }
   )
