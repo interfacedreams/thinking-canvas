@@ -5,8 +5,6 @@ import type {
   CanvasDoc,
   ChosenFile,
   FolderState,
-  McpConfig,
-  McpProbeResult,
   NoteVersion,
   PermissionReply,
   PermissionSettings,
@@ -28,12 +26,6 @@ const api = {
     permissions: (): Promise<PermissionSettings> => ipcRenderer.invoke('settings:permissions:get'),
     setPermissions: (patch: Partial<PermissionSettings>): Promise<PermissionSettings> =>
       ipcRenderer.invoke('settings:permissions:set', patch)
-  },
-  mcp: {
-    get: (): Promise<McpConfig> => ipcRenderer.invoke('mcp:get'),
-    set: (patch: Partial<Pick<McpConfig, 'enabled' | 'json'>>): Promise<McpConfig> =>
-      ipcRenderer.invoke('mcp:set', patch),
-    probe: (): Promise<McpProbeResult> => ipcRenderer.invoke('mcp:probe')
   },
   folder: {
     get: (): Promise<FolderState> => ipcRenderer.invoke('folder:get'),

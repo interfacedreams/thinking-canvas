@@ -310,55 +310,6 @@ export const DEFAULT_PERMISSION_SETTINGS: PermissionSettings = {
   autoAllowAll: false
 }
 
-// --- MCP connectors ---
-
-/** App-wide MCP server configuration — userData/mcp.json. Applies to every
- *  folder and chat (the file lives in userData, not per-project). The user
- *  pastes the standard Claude Desktop `mcpServers` JSON shape; enabled servers
- *  are passed to every agent turn and their tools (`mcp__<server>__…`) are
- *  auto-approved, since adding a server is itself consent to use it.
- *
- *  `json` carries the raw config verbatim INCLUDING any credentials, so the
- *  textarea can round-trip for editing. It's encrypted at rest in mcp.json;
- *  the renderer is the local, already-trusted agent host, so the plaintext
- *  crossing IPC matches the app's existing single-user posture. */
-export interface McpConfig {
-  /** Master switch — off means no servers are passed to the agent. */
-  enabled: boolean
-  /** Raw JSON text of the mcpServers map. '' when nothing is configured. */
-  json: string
-  /** Server names parsed from `json` (the map keys), for display + status. */
-  serverNames: string[]
-  /** Parse/validation error from the stored `json`, or null when it's clean. */
-  error: string | null
-}
-
-export const DEFAULT_MCP_CONFIG: McpConfig = {
-  enabled: false,
-  json: '',
-  serverNames: [],
-  error: null
-}
-
-/** One server's live connection status from a probe (query.mcpServerStatus). */
-export interface McpServerStatusView {
-  name: string
-  /** SDK status, plus 'error' for a server missing from the probe result. */
-  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled' | 'error'
-  /** Failure detail when status is 'failed'. */
-  error?: string
-  /** Tools the server exposed (present when connected). */
-  toolCount?: number
-}
-
-/** Result of a connection probe: per-server statuses, or a top-level reason it
- *  couldn't run at all (no auth, disabled, unparseable config). */
-export interface McpProbeResult {
-  ok: boolean
-  servers: McpServerStatusView[]
-  error?: string
-}
-
 /** A tool call waiting on the user's Allow/Deny (SDK canUseTool round-trip). */
 export interface PermissionRequest {
   requestId: string

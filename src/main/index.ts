@@ -15,11 +15,7 @@ import { tmpdir } from 'os'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { ElectronBlocker, adsAndTrackingLists } from '@ghostery/adblocker-electron'
-import {
-  query,
-  type McpServerConfig,
-  type SDKUserMessage
-} from '@anthropic-ai/claude-agent-sdk'
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import icon from '../../resources/icon.png?asset'
 import { initAutoUpdater } from './updater'
 import {
@@ -43,8 +39,6 @@ import type {
   ChosenFile,
   EffortId,
   FolderState,
-  McpConfig,
-  McpProbeResult,
   ModelId,
   NoteDoc,
   NoteVersion,
@@ -127,7 +121,8 @@ const canvasFileFor = (root: string): string => join(root, '.canvas', 'canvas.js
 const memoryFileFor = (root: string): string => join(root, 'MEMORY.md')
 
 // The always-present CLAUDE.md node: a note whose live body IS the folder's
-// CLAUDE.md (the agent's project instructions, loaded via settingSources).
+// CLAUDE.md (the agent's project instructions, appended to every chat turn's
+// system prompt — read manually, not via settingSources; see the send handler).
 // Fixed id and filename — the renderer injects the node, main hard-maps it to
 // the root file regardless of what canvas.json recorded.
 const CLAUDE_MD_ID = 'claude-md'
@@ -829,12 +824,6 @@ async function readPermissionSettings(): Promise<PermissionSettings> {
 
 function autoAllowed(toolName: string): boolean {
   if (permissionSettings.autoAllowAll) return true
-  // A configured MCP server's tools (mcp__<server>__<tool>) are pre-approved —
-  // adding the server in Settings is itself consent to let the agent call it.
-  if (toolName.startsWith('mcp__') && activeMcpServers()) {
-    const server = toolName.slice('mcp__'.length).split('__')[0]
-    if (mcpServerNames.has(server)) return true
-  }
   return permissionSettings.allowWebSearch && (toolName === 'WebSearch' || toolName === 'WebFetch')
 }
 
@@ -862,209 +851,6 @@ function registerPermissionSettingsIpc(): void {
         if (autoAllowed(toolName)) resolve(true)
       }
       return permissionSettings
-    }
-  )
-}
-
-// --- MCP connectors -------------------------------------------------------
-// App-wide MCP servers, persisted in userData/mcp.json. The user pastes the
-// standard Claude Desktop `mcpServers` JSON shape; when enabled, every agent
-// turn gets these servers and their tools are auto-approved in canUseTool
-// (configuring a server is consent to use it). The raw JSON — credentials and
-// all — is encrypted at rest with safeStorage, same as auth.json.
-
-const mcpFile = (): string => join(app.getPath('userData'), 'mcp.json')
-
-let mcpEnabled = false
-let mcpJson = '' // raw `mcpServers`-shaped JSON, '' when unconfigured
-// Derived from mcpJson on every load/save so the agent and canUseTool never
-// re-parse: the SDK-ready map, the set of server names, and any parse error.
-let mcpServersMap: Record<string, McpServerConfig> = {}
-let mcpServerNames = new Set<string>()
-let mcpParseError: string | null = null
-
-// Parse the pasted JSON into a server map. Accepts either the full
-// `{ "mcpServers": { … } }` wrapper (what docs show) or the bare inner map.
-// Validation is light — enough to catch a malformed paste, not to vet every
-// field; the SDK rejects truly bad configs at connect time.
-function parseMcpJson(text: string): {
-  map: Record<string, McpServerConfig>
-  names: string[]
-  error: string | null
-} {
-  const trimmed = text.trim()
-  if (!trimmed) return { map: {}, names: [], error: null }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return { map: {}, names: [], error: 'Not valid JSON.' }
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { map: {}, names: [], error: 'Expected a JSON object of servers.' }
-  }
-  const obj = parsed as Record<string, unknown>
-  const servers =
-    obj.mcpServers && typeof obj.mcpServers === 'object' && !Array.isArray(obj.mcpServers)
-      ? (obj.mcpServers as Record<string, unknown>)
-      : obj
-  const map: Record<string, McpServerConfig> = {}
-  for (const [name, cfg] of Object.entries(servers)) {
-    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) {
-      return { map: {}, names: [], error: `Server "${name}" must be an object.` }
-    }
-    const c = cfg as Record<string, unknown>
-    const hasCommand = typeof c.command === 'string'
-    const hasUrl = typeof c.url === 'string'
-    if (!hasCommand && !hasUrl) {
-      return {
-        map: {},
-        names: [],
-        error: `Server "${name}" needs a "command" (stdio) or "url" (http/sse).`
-      }
-    }
-    map[name] = cfg as McpServerConfig
-  }
-  return { map, names: Object.keys(map), error: null }
-}
-
-function refreshMcpDerived(): void {
-  const { map, names, error } = parseMcpJson(mcpJson)
-  mcpServersMap = map
-  mcpServerNames = new Set(names)
-  mcpParseError = error
-}
-
-function mcpConfigView(): McpConfig {
-  return {
-    enabled: mcpEnabled,
-    json: mcpJson,
-    serverNames: [...mcpServerNames],
-    error: mcpParseError
-  }
-}
-
-/** The server map to hand the SDK, or null when MCP is off / unconfigured /
- *  unparseable — callers spread it conditionally. */
-function activeMcpServers(): Record<string, McpServerConfig> | null {
-  if (!mcpEnabled || mcpParseError || mcpServerNames.size === 0) return null
-  return mcpServersMap
-}
-
-/** allowedTools entries that admit every tool of each active server. Empty
- *  when MCP is off — used by research mode, which sets a strict allowlist. */
-function mcpAllowedTools(): string[] {
-  return activeMcpServers() ? [...mcpServerNames].map((n) => `mcp__${n}`) : []
-}
-
-async function readMcpConfig(): Promise<void> {
-  try {
-    const raw = JSON.parse(await fs.readFile(mcpFile(), 'utf8'))
-    mcpEnabled = raw.enabled === true
-    mcpJson = decodeSecret(raw.config).value ?? ''
-  } catch {
-    mcpEnabled = false
-    mcpJson = ''
-  }
-  refreshMcpDerived()
-}
-
-async function writeMcpConfig(): Promise<void> {
-  if (!mcpJson.trim() && !mcpEnabled) {
-    await fs.rm(mcpFile(), { force: true })
-    return
-  }
-  const body = { enabled: mcpEnabled, config: encodeSecret(mcpJson) }
-  await fs.writeFile(mcpFile(), JSON.stringify(body), { mode: 0o600 })
-}
-
-// Probe the configured servers for a live connection status to show in
-// Settings. We open a query with the servers but feed it a streaming input
-// that never yields a message — so the subprocess connects to the servers and
-// emits its `init` system message, but the model never takes a turn (≈zero
-// token cost). `alwaysLoad` forces the connect to block (capped ~5s) so the
-// status is settled by init, then we read it and tear the query down.
-async function probeMcpServers(): Promise<McpProbeResult> {
-  const servers = activeMcpServers()
-  if (!servers) {
-    return {
-      ok: false,
-      servers: [],
-      error: mcpParseError ?? (mcpEnabled ? 'No servers configured.' : 'Connectors are off.')
-    }
-  }
-  if (!oauthToken && !userApiKey && !envApiKey) {
-    return { ok: false, servers: [], error: 'Add a Claude token or API key first.' }
-  }
-
-  const loaded: Record<string, McpServerConfig> = Object.fromEntries(
-    Object.entries(servers).map(([name, cfg]) => [
-      name,
-      { ...(cfg as Record<string, unknown>), alwaysLoad: true } as McpServerConfig
-    ])
-  )
-  const ac = new AbortController()
-  // Input that yields nothing until aborted — keeps the session idle (no model
-  // turn) yet alive long enough to read mcpServerStatus().
-  const idleInput = (async function* (): AsyncGenerator<SDKUserMessage> {
-    await new Promise<void>((res) =>
-      ac.signal.addEventListener('abort', () => res(), { once: true })
-    )
-  })()
-  const probe = query({
-    prompt: idleInput,
-    options: {
-      cwd: folderRoot ?? app.getPath('userData'),
-      ...claudeExecOpt(),
-      model: TITLE_MODEL,
-      mcpServers: loaded,
-      abortController: ac
-    }
-  })
-  const timer = setTimeout(() => ac.abort(), 15000)
-  try {
-    for await (const msg of probe) {
-      if (msg.type === 'system' && msg.subtype === 'init') {
-        const statuses = await probe.mcpServerStatus()
-        const byName = new Map(statuses.map((s) => [s.name, s]))
-        return {
-          ok: true,
-          // Report every configured server, even one the SDK dropped silently.
-          servers: [...mcpServerNames].map((name) => {
-            const s = byName.get(name)
-            if (!s) return { name, status: 'error' as const, error: 'Not started.' }
-            return {
-              name,
-              status: s.status as McpProbeResult['servers'][number]['status'],
-              ...(s.error ? { error: s.error } : {}),
-              ...(s.tools ? { toolCount: s.tools.length } : {})
-            }
-          })
-        }
-      }
-    }
-  } catch (err) {
-    return { ok: false, servers: [], error: err instanceof Error ? err.message : 'Probe failed.' }
-  } finally {
-    ac.abort()
-    clearTimeout(timer)
-  }
-  return { ok: false, servers: [], error: 'No response from the agent.' }
-}
-
-function registerMcpIpc(): void {
-  ipcMain.handle('mcp:get', (): McpConfig => mcpConfigView())
-
-  ipcMain.handle('mcp:probe', (): Promise<McpProbeResult> => probeMcpServers())
-
-  ipcMain.handle(
-    'mcp:set',
-    async (_event, patch: Partial<Pick<McpConfig, 'enabled' | 'json'>>): Promise<McpConfig> => {
-      if (typeof patch.enabled === 'boolean') mcpEnabled = patch.enabled
-      if (typeof patch.json === 'string') mcpJson = patch.json
-      refreshMcpDerived()
-      await writeMcpConfig()
-      return mcpConfigView()
     }
   )
 }
@@ -1134,20 +920,13 @@ function registerAdblockIpc(): void {
 
 // Research mode: the lead agent of a chat turn may spawn these subagents.
 // Each spawn renders as a display-only child node on the canvas.
-// Built per-turn so an enabled MCP server's tools join WebSearch/WebFetch
-// (additive — researchers keep built-in web search even with a custom server).
-function researcherDef(): { description: string; prompt: string; tools: string[] } {
-  const mcpTools = mcpAllowedTools()
-  return {
-    description: 'Focused web researcher for one angle of a question',
-    prompt:
-      'You are a focused web researcher. Use WebSearch to find sources and WebFetch to read the most ' +
-      'promising ones' +
-      (mcpTools.length ? ', plus any configured search tools available to you' : '') +
-      '. Cross-check important claims. Return a concise report: key findings as bullets ' +
-      'with source URLs inline, ending with a list of all sources used.',
-    tools: ['WebSearch', 'WebFetch', ...mcpTools]
-  }
+const RESEARCHER_DEF = {
+  description: 'Focused web researcher for one angle of a question',
+  prompt:
+    'You are a focused web researcher. Use WebSearch to find sources and WebFetch to read the most ' +
+    'promising ones. Cross-check important claims. Return a concise report: key findings as bullets ' +
+    'with source URLs inline, ending with a list of all sources used.',
+  tools: ['WebSearch', 'WebFetch']
 }
 // Always-on framing. The claude_code preset is a coding-agent prompt: left to
 // itself it surveys the working directory ("Let me explore the project
@@ -1231,6 +1010,9 @@ function registerThreadIpc(): void {
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // text-only turn — no tools, so no permission round-trips
+          // Isolation mode: never load filesystem config (a folder's settings
+          // hooks would otherwise fire on session start).
+          settingSources: [],
           systemPrompt: 'You write concise titles. Reply with only the title.'
         }
       })
@@ -1270,6 +1052,7 @@ function registerThreadIpc(): void {
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // text-only — no tools, no permission round-trips
+          settingSources: [], // isolation mode — same reasoning as thread:title
           systemPrompt:
             'You write terse, factual index descriptions. Reply with only the description.'
         }
@@ -1333,6 +1116,7 @@ function registerThreadIpc(): void {
           model: TITLE_MODEL,
           maxTurns: 1,
           tools: [], // vision-only — no tools, no permission round-trips
+          settingSources: [], // isolation mode — same reasoning as thread:title
           systemPrompt:
             'You write terse, factual index descriptions. Reply with only the description.'
         }
@@ -1381,7 +1165,16 @@ function registerThreadIpc(): void {
     if (!raw) return true
     const abs = isAbsolute(raw) ? resolve(raw) : resolve(root, raw)
     const rel = relative(root, abs)
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+    if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) return false
+    // Agent config files are inside the boundary but never agent-touchable.
+    // This app never loads them (settingSources is always []), but OTHER tools
+    // do: writing .claude/settings.json could plant a command hook that runs
+    // shell the next time the user opens this folder in Claude Code proper,
+    // and .mcp.json may hold server credentials. Denied both directions.
+    // (Grep over the whole folder can still surface .mcp.json lines in its
+    // matches — don't put plaintext secrets there; use ${env:...}.)
+    if (rel === '.mcp.json' || rel === '.claude' || rel.startsWith(`.claude${sep}`)) return false
+    return true
   }
 
   ipcMain.handle(
@@ -1463,6 +1256,7 @@ function registerThreadIpc(): void {
           ? computer
           : null
       const computerServer = computerTarget ? createComputerServer(computerTarget) : null
+
       if (computer) {
         console.log(
           `[computer] node=${nodeId.slice(0, 8)} target=${computer.targetId.slice(0, 8)}` +
@@ -1695,8 +1489,26 @@ function registerThreadIpc(): void {
           : notePath
             ? ''
             : 'PROJECT MEMORY — empty. You have no pinned context; answer directly.'
+        // The folder's CLAUDE.md (the always-present instructions card), read
+        // manually and appended. Deliberately NOT loaded via settingSources
+        // 'project' — that flag would also load .claude/settings.json hooks
+        // and .mcp.json, i.e. code execution from folder contents. Root file
+        // only; nested CLAUDE.md files are ordinary notes here.
+        // Read-only to every session except the card's own note session (the
+        // PreToolUse hook enforces this) — told up front so the agent doesn't
+        // pick CLAUDE.md as a write target and burn a turn on the denial.
+        const editsClaudeMd =
+          notePath !== null && resolve(notePath) === resolve(root, CLAUDE_MD_FILE)
+        const claudeMd = (await readTextIfExists(join(root, CLAUDE_MD_FILE))).trim()
+        const claudeMdAppend = editsClaudeMd
+          ? '' // this session's whole job is editing CLAUDE.md — no notice, no echo
+          : claudeMd
+            ? "Project instructions from the folder's CLAUDE.md (read-only — you cannot " +
+              `edit CLAUDE.md; the user edits it via its card):\n\n${claudeMd}`
+            : "The folder's CLAUDE.md is read-only to you — never write to it."
         const systemAppend = [
           BASE_APPEND,
+          claudeMdAppend,
           contextAppend,
           writableAppend,
           filesAppend,
@@ -1781,44 +1593,62 @@ function registerThreadIpc(): void {
               preset: 'claude_code',
               ...(systemAppend ? { append: systemAppend } : {})
             },
-            // Configured MCP servers are available to every turn; their tools
-            // auto-approve in canUseTool (see autoAllowed). A computer-use turn
-            // adds the in-process computer server on top. The key is omitted
-            // entirely when there's nothing to pass.
-            ...(activeMcpServers() || computerServer
-              ? {
-                  mcpServers: {
-                    ...(activeMcpServers() ?? {}),
-                    ...(computerServer ? { computer: computerServer } : {})
-                  }
-                }
-              : {}),
+            // The only MCP server a turn ever gets is the app's own in-process
+            // computer-use server (an SDK server object, not a spawned child) —
+            // external MCP connectors are deliberately unsupported so a turn
+            // can never start a process. The key is omitted when the toggle is
+            // off so the SDK doesn't advertise a dormant tool.
+            ...(computerServer ? { mcpServers: { computer: computerServer } } : {}),
             ...(research
               ? {
-                  // Researchers also get any configured MCP tools, alongside
-                  // WebSearch/WebFetch (additive — research still works with no
-                  // MCP server set up).
-                  agents: { researcher: researcherDef() },
+                  agents: { researcher: RESEARCHER_DEF },
                   // Pre-approved so a research turn doesn't spam permission
                   // prompts; everything else still routes through canUseTool.
-                  // Research sets a strict allowlist, so MCP tools must be named
-                  // here too or they'd be blocked despite being configured.
                   allowedTools: [
                     'Agent',
                     'WebSearch',
                     'WebFetch',
-                    ...mcpAllowedTools(),
                     ...(computerServer ? ['mcp__computer__computer'] : [])
                   ],
                   forwardSubagentText: true
                 }
               : {}),
-            // This is a thinking canvas, not a coding agent: it never needs a
-            // shell. Hard-removing the code-execution tools turns the file
+            // This is a thinking canvas, not a coding agent: it never needs to
+            // run code. `tools` is an explicit ALLOWLIST of built-in tools —
+            // anything unlisted (Bash, REPL, Monitor, Workflow, worktrees, …)
+            // simply doesn't exist for the turn, including in subagents, so no
+            // SDK upgrade can quietly widen the surface. It also turns the file
             // boundary below into a real wall (nothing can run a script that
             // opens files out of band) and means a non-coder can't be prompted
-            // into approving an arbitrary command. NotebookEdit is unused.
-            disallowedTools: ['Bash', 'BashOutput', 'KillShell', 'NotebookEdit'],
+            // into approving an arbitrary command. The computer-use MCP tool is
+            // unaffected — mcpServers tools ride outside this base set.
+            tools: [
+              'Read',
+              'Glob',
+              'Grep',
+              'Edit',
+              'Write',
+              'MultiEdit',
+              'WebSearch',
+              'WebFetch',
+              'TodoWrite',
+              'Agent'
+            ],
+            // Belt and braces should `tools` semantics ever drift: explicitly
+            // ban every tool in the current SDK that can execute code or spawn
+            // a process. (Monitor takes a shell `command`; REPL runs JS;
+            // EnterWorktree runs git, which can fire repo-local hooks.)
+            disallowedTools: [
+              'Bash',
+              'BashOutput',
+              'KillShell',
+              'NotebookEdit',
+              'REPL',
+              'Workflow',
+              'Monitor',
+              'EnterWorktree',
+              'ExitWorktree'
+            ],
             // Filesystem boundary: deny any file tool whose path escapes the
             // project folder. A PreToolUse deny bypasses canUseTool and fires
             // even for auto-approved reads, so this — not canUseTool — is the
@@ -1830,12 +1660,31 @@ function registerThreadIpc(): void {
                     async (input) => {
                       if (input.hook_event_name !== 'PreToolUse') return {}
                       const ti = (input.tool_input ?? {}) as Record<string, unknown>
-                      if (allowedByFolderScope(root, input.tool_name, ti)) return {}
+                      let reason: string | null = null
+                      if (!allowedByFolderScope(root, input.tool_name, ti)) {
+                        reason = `${input.tool_name} blocked: file paths must stay inside the project folder.`
+                      } else if (
+                        EDIT_TOOLS.has(input.tool_name) &&
+                        typeof ti.file_path === 'string'
+                      ) {
+                        // CLAUDE.md rides every turn's system prompt as standing
+                        // instructions, so a chat turn writing it would steer all
+                        // future turns. Only the card's own note session edits it.
+                        const target = resolve(root, ti.file_path)
+                        if (
+                          target === resolve(root, CLAUDE_MD_FILE) &&
+                          (!notePath || resolve(notePath) !== target)
+                        ) {
+                          reason =
+                            'CLAUDE.md is read-only from this session — the user edits it via its card.'
+                        }
+                      }
+                      if (!reason) return {}
                       return {
                         hookSpecificOutput: {
                           hookEventName: 'PreToolUse',
                           permissionDecision: 'deny',
-                          permissionDecisionReason: `${input.tool_name} blocked: file paths must stay inside the project folder.`
+                          permissionDecisionReason: reason
                         }
                       }
                     }
@@ -1843,7 +1692,12 @@ function registerThreadIpc(): void {
                 }
               ]
             },
-            settingSources: ['project'], // required or CLAUDE.md is not loaded
+            // Always SDK isolation mode: no filesystem config is ever loaded,
+            // so a folder's .claude/settings.json hooks and .mcp.json can never
+            // execute anything — opening someone else's folder is safe without
+            // a trust prompt. CLAUDE.md (which 'project' would have loaded) is
+            // read manually and appended to the system prompt instead.
+            settingSources: [],
             // Notes stay in default mode so every edit routes through canUseTool,
             // where it's checked against the note's own file.
             permissionMode: notePath ? 'default' : 'acceptEdits',
@@ -2687,7 +2541,6 @@ app.whenReady().then(async () => {
   applyAuthEnv()
 
   permissionSettings = await readPermissionSettings()
-  await readMcpConfig()
 
   // Reopen the folder from last time if it still exists.
   const settings = await readSettings()
@@ -2700,7 +2553,6 @@ app.whenReady().then(async () => {
   registerFolderIpc()
   registerAuthIpc()
   registerPermissionSettingsIpc()
-  registerMcpIpc()
   registerAdblockIpc()
 
   createWindow()

@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, Plug, Settings, Wrench } from 'lucide-react'
+import { KeyRound, Settings, Wrench } from 'lucide-react'
 import { useSettingsStore } from '@renderer/features/settings/settingsStore'
 import AuthSection from '@renderer/features/settings/AuthSection'
-import McpSection from '@renderer/features/settings/McpSection'
 import TabbedModal, { type ModalTab } from '@renderer/ui/TabbedModal'
 
 /**
@@ -49,12 +48,11 @@ function ToggleRow({
   )
 }
 
-type Tab = 'subscription' | 'permissions' | 'mcp'
+type Tab = 'subscription' | 'permissions'
 
 const TABS: ModalTab[] = [
   { id: 'subscription', label: 'Credentials', icon: KeyRound },
-  { id: 'permissions', label: 'Tools', icon: Wrench },
-  { id: 'mcp', label: 'Connectors', icon: Plug }
+  { id: 'permissions', label: 'Tools', icon: Wrench }
 ]
 
 export default function SettingsButton(): React.JSX.Element {
@@ -124,8 +122,6 @@ export default function SettingsButton(): React.JSX.Element {
               )}
             </div>
           )}
-
-          {tab === 'mcp' && <McpSection />}
         </TabbedModal>
       )}
     </>
