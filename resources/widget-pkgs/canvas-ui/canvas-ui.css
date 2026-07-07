@@ -1,0 +1,129 @@
+/* canvas-ui — the thinking-canvas design tokens for widgets. Declaring
+ * packages:["canvas-ui"] makes AI-authored cards look native to the canvas
+ * (paper body, post-it palette, matching type) with almost no bespoke CSS. */
+
+:root {
+  --paper: #fffdf6;
+  --ink: #262626;
+  --ink-soft: #737373;
+  --edge: #e7e0cd;
+  /* the post-it palette's accents */
+  --butter: #e3c76f;
+  --peach: #e8a06c;
+  --rose: #e398ab;
+  --lavender: #b6a3e0;
+  --sky: #8fbee3;
+  --mint: #7ecfb7;
+  --sage: #b2ce7e;
+  --stone: #b8b2a4;
+  --accent: var(--sky);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+h1, h2, h3, h4 {
+  margin: 0 0 8px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+h1 { font-size: 20px; }
+h2 { font-size: 17px; }
+h3 { font-size: 15px; }
+h4 { font-size: 13px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
+
+p { margin: 0 0 8px; }
+small, .muted { color: var(--ink-soft); }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button, .btn {
+  display: inline-block;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+button:hover, .btn:hover { filter: brightness(0.94); }
+button:active, .btn:active { transform: scale(0.98); }
+button.ghost, .btn.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--edge);
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0 0 8px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--edge);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th, td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--edge);
+}
+th { color: var(--ink-soft); font-weight: 600; }
+tr:hover td { background: rgba(0, 0, 0, 0.025); }
+
+input, select, textarea {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+input[type='range'] { padding: 0; border: none; accent-color: var(--accent); }
+input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); }
+
+hr { border: none; border-top: 1px solid var(--edge); margin: 10px 0; }
+
+code, pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12.5px;
+  background: rgba(0, 0, 0, 0.045);
+  border-radius: 6px;
+}
+code { padding: 1px 5px; }
+pre { padding: 10px; overflow-x: auto; }
+pre code { padding: 0; background: none; }

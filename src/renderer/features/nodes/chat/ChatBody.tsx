@@ -7,6 +7,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import {
+  LayoutTemplate,
   RotateCcw,
   Telescope,
   TriangleAlert,
@@ -19,15 +20,25 @@ import { useCanvasStore, isChat, type Message } from '@renderer/store/canvas'
 import { useForwardedWheel } from '@renderer/lib/useForwardedWheel'
 import { MarkdownSourceContext, markdownComponents } from '@renderer/lib/markdownLink'
 import PermissionPrompt from '@renderer/features/settings/PermissionPrompt'
+import InlineWidget from '@renderer/features/nodes/widget/InlineWidget'
 import Tooltip from '@renderer/ui/Tooltip'
 
 function MessageView({
   message,
-  pending
+  pending,
+  chatId
 }: {
   message: Message
   pending?: boolean
+  chatId: string
 }): React.JSX.Element {
+  if (message.kind === 'widget-inline' && message.widgetId) {
+    return (
+      <div data-msg={message.id} className="px-3 py-1">
+        <InlineWidget chatId={chatId} widgetId={message.widgetId} height={message.height} />
+      </div>
+    )
+  }
   if (message.role === 'user') {
     return (
       <div
@@ -46,6 +57,17 @@ function MessageView({
       >
         <MousePointerClick size={11} className={`shrink-0 ${pending ? 'animate-pulse' : ''}`} />
         <span className={pending ? 'animate-pulse' : ''}>{message.text}</span>
+      </div>
+    )
+  }
+  if (message.kind === 'widget-action') {
+    return (
+      <div
+        data-msg={message.id}
+        className="mb-1 flex items-center gap-1.5 px-3 py-0.5 text-xs text-neutral-400"
+      >
+        <LayoutTemplate size={11} className="shrink-0" />
+        <span>{message.text}</span>
       </div>
     )
   }
@@ -209,6 +231,7 @@ const ChatBody = forwardRef<
                 key={m.id}
                 message={m}
                 pending={streaming && i === data.messages.length - 1}
+                chatId={id}
               />
             ))}
           </div>

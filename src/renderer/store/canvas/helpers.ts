@@ -24,6 +24,7 @@ import {
   isLabel,
   isLink,
   isNote,
+  isWidget,
   makeFileNode,
   makeLinkNode,
   makeNode,
@@ -89,14 +90,20 @@ export function createStoreHelpers(
                   }
                 : isLabel(n)
                   ? { kind: 'label' as const }
-                  : n.data.kind === 'research'
-                    ? { kind: 'research' as const }
-                    : {
-                        // A plain chat (no `kind`) — only its memory metadata rides
-                        // canvas.json; the transcript saves to its own thread file.
+                  : isWidget(n)
+                    ? {
+                        kind: 'widget' as const,
                         ...(n.data.pinned ? { pinned: true } : {}),
                         ...(n.data.description ? { description: n.data.description } : {})
-                      }),
+                      }
+                    : n.data.kind === 'research'
+                      ? { kind: 'research' as const }
+                      : {
+                          // A plain chat (no `kind`) — only its memory metadata rides
+                          // canvas.json; the transcript saves to its own thread file.
+                          ...(n.data.pinned ? { pinned: true } : {}),
+                          ...(n.data.description ? { description: n.data.description } : {})
+                        }),
           position: n.position,
           width: n.width ?? NODE_W,
           ...(height != null ? { height } : {}),
@@ -104,7 +111,7 @@ export function createStoreHelpers(
           ...(n.data.updatedAt != null ? { updatedAt: n.data.updatedAt } : {}),
           ...(n.data.color ? { color: n.data.color } : {}),
           ...(n.data.minimized ? { minimized: true } : {}),
-          ...(!isFile(n) && !isLink(n) && !isLabel(n) && n.data.sessionId
+          ...(!isFile(n) && !isLink(n) && !isLabel(n) && !isWidget(n) && n.data.sessionId
             ? { sessionId: n.data.sessionId }
             : {}),
           ...(isChat(n) && n.data.forkOf ? { forkOf: n.data.forkOf } : {}),
@@ -359,6 +366,26 @@ export function createStoreHelpers(
           : []
       )
 
+  // Widgets connected to a chat ride the system prompt (id + title + HTML) so
+  // the model can reference and update_widget them instead of authoring
+  // duplicates. Direct connections only — a widget is scaffolding for the
+  // chat beside it, never hauled through upstream chats. Truncated: a widget
+  // is bounded, but 16k of HTML per card is all a prompt should carry.
+  const contextWidgetsFor = (id: string): { id: string; title: string; html: string }[] =>
+    peersOf(id)
+      .filter(isWidget)
+      .flatMap((n) =>
+        n.data.html
+          ? [
+              {
+                id: n.id,
+                title: n.data.title || 'Untitled widget',
+                html: n.data.html.slice(0, 16_000)
+              }
+            ]
+          : []
+      )
+
   // The tab a computer-use turn drives: the first wired tab (direct wires
   // first, then upstream chats') whose <webview> guest is alive right now —
   // a minimized tab has no guest and sits out, same as page extraction.
@@ -505,6 +532,7 @@ export function createStoreHelpers(
     const newFileIds = contextFiles.filter((f) => f.isNew).map((f) => f.id)
     if (newFileIds.length > 0) pendingFileInjections.set(id, newFileIds)
     else pendingFileInjections.delete(id)
+    const contextWidgets = contextWidgetsFor(id)
     // Reading the tabs' rendered pages is async — the composer already cleared
     // and the bubble is streaming-pending, so the await is invisible (and capped
     // by pageText's extraction timeout).
@@ -524,7 +552,8 @@ export function createStoreHelpers(
         ...(opts?.computer ? { computer: opts.computer } : {}),
         ...(contextNotes.length > 0 ? { contextNotes } : {}),
         ...(contextFiles.length > 0 ? { contextFiles } : {}),
-        ...(contextLinks.length > 0 ? { contextLinks } : {})
+        ...(contextLinks.length > 0 ? { contextLinks } : {}),
+        ...(contextWidgets.length > 0 ? { contextWidgets } : {})
       })
     })()
   }

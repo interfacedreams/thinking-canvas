@@ -1,4 +1,5 @@
 import { useToastStore } from '@renderer/ui/toastStore'
+import { postToWidget } from '@renderer/features/nodes/widget/widgetFrames'
 import { isChat, isFile, isLabel, isLink, isNote, uid } from './model'
 import type { CanvasNode } from './model'
 import { useCanvasStore } from './store'
@@ -78,6 +79,68 @@ window.api.thread.onEvent((event) => {
               }
             ]
       return { messages: keepTail ? [...next, tail] : next }
+    })
+  } else if (event.type === 'widget-inline') {
+    // show_inline_widget: drop a widget-inline message into the transcript at
+    // this point. A trailing empty assistant placeholder stays last so the
+    // turn's text keeps streaming below the block.
+    patch(event.nodeId, (node) => {
+      if (!isChat(node)) return {}
+      const msgs = node.data.messages
+      const tail = msgs[msgs.length - 1]
+      const keepTail = tail && tail.role === 'assistant' && !tail.kind && tail.text === ''
+      const body = keepTail ? msgs.slice(0, -1) : [...msgs]
+      const block = {
+        id: uid(),
+        role: 'assistant' as const,
+        text: 'Inline widget', // non-empty so persistThread keeps it
+        kind: 'widget-inline' as const,
+        widgetId: event.widgetId,
+        ...(event.height != null ? { height: event.height } : {})
+      }
+      return { messages: keepTail ? [...body, block, tail] : [...body, block] }
+    })
+  } else if (event.type === 'widget-data') {
+    // set_widget_data: push straight into the widget's sandbox — no HTML
+    // rewrite, no transcript chip (it's the cheap-refresh path).
+    postToWidget(event.widgetId, 'data', event.payload)
+  } else if (event.type === 'widget-created' || event.type === 'widget-updated') {
+    // Materialize / refresh the card first, then drop a status chip into the
+    // transcript (like computer-action chips, one line per widget event).
+    const store = useCanvasStore.getState()
+    if (event.type === 'widget-created') {
+      store.addWidgetFromAgent(event.nodeId, {
+        widgetId: event.widgetId,
+        title: event.title,
+        html: event.html,
+        width: event.width,
+        height: event.height
+      })
+    } else {
+      store.applyWidgetUpdate(event.widgetId, { html: event.html, title: event.title })
+    }
+    const label =
+      event.type === 'widget-created'
+        ? `Created widget “${event.title || 'Untitled widget'}”`
+        : `Updated widget “${(() => {
+            const w = useCanvasStore.getState().nodes.find((n) => n.id === event.widgetId)
+            return w?.data.title || 'Untitled widget'
+          })()}”`
+    patch(event.nodeId, (node) => {
+      if (!isChat(node)) return {}
+      const msgs = node.data.messages
+      const tail = msgs[msgs.length - 1]
+      // Keep a trailing empty assistant placeholder last so the turn's text
+      // keeps streaming into it.
+      const keepTail = tail && tail.role === 'assistant' && !tail.kind && tail.text === ''
+      const body = keepTail ? msgs.slice(0, -1) : [...msgs]
+      const chip = {
+        id: uid(),
+        role: 'assistant' as const,
+        text: label,
+        kind: 'widget-action' as const
+      }
+      return { messages: keepTail ? [...body, chip, tail] : [...body, chip] }
     })
   } else if (event.type === 'spawn') {
     // The lead called the Agent tool — show an inline status chip in the parent chat.

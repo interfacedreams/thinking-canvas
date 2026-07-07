@@ -16,7 +16,8 @@ import {
   memoryFileFor,
   readTextIfExists,
   threadFileFor,
-  threadsDirFor
+  threadsDirFor,
+  widgetFileFor
 } from './paths'
 import {
   createNoteFile,
@@ -45,6 +46,7 @@ export async function writeCanvasFile(root: string, doc: CanvasDoc): Promise<voi
       delete copy.noteVersions
       delete copy.file
       delete copy.dataUrl
+      delete copy.html
       const file =
         node.kind === 'note'
           ? noteFiles.get(node.id)
@@ -263,6 +265,10 @@ export function registerCanvasIpc(): void {
             noteSync.set(node.id, node.content)
             node.noteVersions = await readNoteVersions(root, node.id)
             if (node.updatedAt == null && path) node.updatedAt = await mtimeOf(path)
+            return
+          }
+          if (node.kind === 'widget') {
+            node.html = await readTextIfExists(widgetFileFor(root, node.id))
             return
           }
           try {

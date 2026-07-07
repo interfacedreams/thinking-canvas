@@ -16,6 +16,7 @@ import NoteNodeView from '@renderer/features/nodes/note/NoteNodeView'
 import FileNodeView from '@renderer/features/nodes/file/FileNodeView'
 import LinkNodeView from '@renderer/features/nodes/link/LinkNodeView'
 import LabelNodeView from '@renderer/features/nodes/label/LabelNodeView'
+import WidgetNodeView from '@renderer/features/nodes/widget/WidgetNodeView'
 import ForkEdge from '@renderer/features/canvas/edges/ForkEdge'
 import ContextEdge from '@renderer/features/canvas/edges/ContextEdge'
 import DeriveEdge from '@renderer/features/canvas/edges/DeriveEdge'
@@ -47,7 +48,8 @@ const nodeTypes: NodeTypes = {
   note: NoteNodeView,
   file: FileNodeView,
   link: LinkNodeView,
-  label: LabelNodeView
+  label: LabelNodeView,
+  widget: WidgetNodeView
 }
 const edgeTypes: EdgeTypes = { fork: ForkEdge, context: ContextEdge, derive: DeriveEdge }
 

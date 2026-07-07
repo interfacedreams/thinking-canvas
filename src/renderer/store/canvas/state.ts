@@ -167,6 +167,19 @@ export interface CanvasState {
   // Wire a chat → note so the chat can read AND write that note.
   discardNode: (id: string) => void
   toggleMinimize: (id: string) => void
+  // Widget nodes (AI-authored HTML cards). A create_widget tool call emits a
+  // widget-created event; this materializes the card beside its chat and
+  // wires it (widget⟷chat plus the chat's tabs).
+  addWidgetFromAgent: (
+    chatId: string,
+    w: { widgetId: string; title: string; html: string; width?: number; height?: number }
+  ) => void
+  // update_widget rewrote the HTML on disk — mirror it and remount the frame.
+  applyWidgetUpdate: (widgetId: string, patch: { html: string; title?: string }) => void
+  // The message bus (MVP: widget↔chat only): a validated canvas.send()
+  // message from a widget's sandbox, routed one hop along its context edges —
+  // chats accept prompt {text}, which sends a real user turn.
+  routeWidgetMessage: (widgetId: string, msg: Record<string, unknown>) => void
   load: () => Promise<Viewport | null>
   persistSoon: () => void
   persistThread: (id: string) => void

@@ -10,6 +10,7 @@ import {
   isFile,
   isLink,
   isNote,
+  isWidget,
   makeLabelNode,
   makeLinkNode,
   measureImage
@@ -74,6 +75,8 @@ export function createNodesSlice(
       for (const nodeId of doomed) {
         const node = byId.get(nodeId)
         if (node && isNote(node)) void window.api.note.delete(nodeId)
+        else if (node && isWidget(node))
+          void window.api.widget.delete(nodeId) // drop its HTML file
         else if (node && isLink(node))
           void window.api.link.unclip(nodeId) // drop its clip, if any
         else if (node && isFile(node)) {
@@ -83,8 +86,17 @@ export function createNodesSlice(
           if (node.data.file) void window.api.file.delete(node.data.file)
         } else {
           void window.api.canvas.deleteThread(nodeId)
-          // A pinned chat left a transcript clip behind — drop it too.
-          if (node && isChat(node) && node.data.pinned) void window.api.chat.unclipMemory(nodeId)
+          if (node && isChat(node)) {
+            // A pinned chat left a transcript clip behind — drop it too.
+            if (node.data.pinned) void window.api.chat.unclipMemory(nodeId)
+            // Inline widgets live in .canvas/widgets keyed by the message —
+            // they die with their transcript.
+            for (const m of node.data.messages) {
+              if (m.kind === 'widget-inline' && m.widgetId) {
+                void window.api.widget.delete(m.widgetId)
+              }
+            }
+          }
         }
       }
       // Write the layout immediately rather than through the 500ms debounce, so
@@ -209,6 +221,7 @@ export function createNodesSlice(
         edges: s.edges.filter((e) => e.source !== id && e.target !== id)
       }))
       if (node && isNote(node)) void window.api.note.delete(id)
+      else if (node && isWidget(node)) void window.api.widget.delete(id)
       else if (node && (isFile(node) || isLink(node))) {
         // nothing on disk to clean up
       } else void window.api.canvas.deleteThread(id)

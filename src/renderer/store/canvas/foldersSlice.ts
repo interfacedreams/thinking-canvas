@@ -6,7 +6,9 @@ import {
   makeLinkNode,
   makeNode,
   makeNoteNode,
-  viewportFitHeight
+  makeWidgetNode,
+  viewportFitHeight,
+  widgetFrame
 } from './model'
 import type { CanvasState } from './state'
 import type { StoreCtx } from './helpers'
@@ -130,6 +132,29 @@ export function createFoldersSlice(
                 id: p.id,
                 width: p.width,
                 // minimized links collapse to the title row (no explicit height)
+                height: p.height != null && !p.minimized ? p.height : undefined
+              }
+            }
+            if (p.kind === 'widget') {
+              const node = makeWidgetNode(
+                p.position,
+                widgetFrame({ width: p.width, height: p.height }),
+                {
+                  title: p.title,
+                  color: p.color,
+                  html: p.html ?? '',
+                  ...(p.pinned ? { pinned: true } : {}),
+                  ...(p.description ? { description: p.description } : {}),
+                  minimized: p.minimized ?? false,
+                  savedHeight,
+                  updatedAt: p.updatedAt
+                }
+              )
+              return {
+                ...node,
+                id: p.id,
+                width: p.width,
+                // minimized widgets collapse to the title row (no explicit height)
                 height: p.height != null && !p.minimized ? p.height : undefined
               }
             }

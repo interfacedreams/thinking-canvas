@@ -8,6 +8,7 @@ import { createMemorySlice } from './memorySlice'
 import { createNodesSlice } from './nodesSlice'
 import { createNotesSlice } from './notesSlice'
 import { createViewSlice } from './viewSlice'
+import { createWidgetsSlice } from './widgetsSlice'
 
 export const useCanvasStore = create<CanvasState>((set, get) => {
   const ctx = createStoreHelpers(set, get)
@@ -36,6 +37,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     ...createNodesSlice(ctx),
     ...createNotesSlice(ctx),
     ...createMemorySlice(ctx),
-    ...createChatSlice(ctx)
+    ...createChatSlice(ctx),
+    ...createWidgetsSlice(ctx)
   }
 })

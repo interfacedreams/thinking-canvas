@@ -80,6 +80,20 @@ const api = {
     // Remove a media card's backing file from the folder (card + file deleted together).
     delete: (rel: string): Promise<void> => ipcRenderer.invoke('file:delete', rel)
   },
+  widget: {
+    // Persist a widget card's HTML to .canvas/widgets/<nodeId>.html (the
+    // widget:// protocol serves it from there).
+    save: (nodeId: string, html: string): Promise<void> =>
+      ipcRenderer.invoke('widget:save', nodeId, html),
+    delete: (nodeId: string): Promise<void> => ipcRenderer.invoke('widget:delete', nodeId),
+    // canvas.fetch broker: main validates the URL against the widget's own
+    // net allowlist (read from its file header) and does the GET itself.
+    fetch: (
+      nodeId: string,
+      url: string
+    ): Promise<{ status?: number; body?: string; error?: string }> =>
+      ipcRenderer.invoke('widget:fetch', nodeId, url)
+  },
   link: {
     // Save a pinned page's Defuddle markdown as a hidden clip the agent can Read.
     // The renderer extracts (only it reaches the live tab); main writes the file.

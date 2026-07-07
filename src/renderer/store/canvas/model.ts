@@ -172,12 +172,35 @@ export interface LabelData {
   [key: string]: unknown
 }
 
+export interface WidgetData {
+  title: string
+  color?: string
+  // The card's HTML — a complete, self-contained document authored by the AI
+  // (create_widget/update_widget). Mirror of .canvas/widgets/<id>.html;
+  // stripped by buildDoc, hydrated on load like a note's content.
+  html: string
+  // Bumped on every update_widget so the sandboxed iframe remounts with the
+  // fresh HTML (its src is keyed on this). Runtime-only.
+  rev?: number
+  // Provenance: the chat whose turn created this widget.
+  sourceChatId?: string
+  pinned?: boolean
+  description?: string
+  minimized: boolean
+  savedHeight?: number
+  updatedAt?: number
+  // Unused; declared so CanvasNode data reads uniformly (see LabelData).
+  pendingPermission?: PermissionRequest
+  [key: string]: unknown
+}
+
 export type ChatNode = Node<ChatData, 'chat'>
 export type NoteNode = Node<NoteData, 'note'>
 export type FileNode = Node<FileData, 'file'>
 export type LinkNode = Node<LinkData, 'link'>
 export type LabelNode = Node<LabelData, 'label'>
-export type CanvasNode = ChatNode | NoteNode | FileNode | LinkNode | LabelNode
+export type WidgetNode = Node<WidgetData, 'widget'>
+export type CanvasNode = ChatNode | NoteNode | FileNode | LinkNode | LabelNode | WidgetNode
 
 // How a node is opened out of its card: docked to the right ('panel') or
 // covering the window ('full'). See CanvasState.expanded.
@@ -188,6 +211,7 @@ export const isNote = (n: CanvasNode): n is NoteNode => n.type === 'note'
 export const isFile = (n: CanvasNode): n is FileNode => n.type === 'file'
 export const isLink = (n: CanvasNode): n is LinkNode => n.type === 'link'
 export const isLabel = (n: CanvasNode): n is LabelNode => n.type === 'label'
+export const isWidget = (n: CanvasNode): n is WidgetNode => n.type === 'widget'
 
 // A pinned chat's transcript, dumped to markdown for its memory clip. Empty
 // (placeholder) messages are skipped so the clip never carries blank turns.
@@ -366,6 +390,42 @@ export function makeLinkNode(
     height: LINK_INPUT_FRAME.height,
     dragHandle: '.drag-handle',
     data: { title: '', minimized: false, ...partial }
+  }
+}
+
+// A widget is born at the tool's width/height hints, clamped to this envelope.
+export const WIDGET_FRAME = { width: 480, height: 400 }
+export const MIN_WIDGET_W = 280
+export const MIN_WIDGET_H = 200
+
+/** A widget's initial frame: the creating tool's hints clamped to the node
+ *  envelope, or the default frame when no hints were given. */
+export function widgetFrame(hints?: { width?: number; height?: number }): {
+  width: number
+  height: number
+} {
+  const width = Math.round(
+    Math.min(NODE_W, Math.max(MIN_WIDGET_W, hints?.width ?? WIDGET_FRAME.width))
+  )
+  const height = Math.round(
+    Math.min(MAX_NODE_H, Math.max(MIN_WIDGET_H, hints?.height ?? WIDGET_FRAME.height))
+  )
+  return { width, height }
+}
+
+export function makeWidgetNode(
+  position: { x: number; y: number },
+  frame: { width: number; height: number },
+  partial?: Partial<WidgetData>
+): WidgetNode {
+  return {
+    id: uid(),
+    type: 'widget',
+    position,
+    width: frame.width,
+    height: frame.height,
+    dragHandle: '.drag-handle',
+    data: { title: '', html: '', minimized: false, ...partial }
   }
 }
 

@@ -10,7 +10,11 @@ import { initFolderRoot, migrateLegacyUserData, registerFolderIpc } from './fold
 import { registerNoteIpc } from './notes'
 import { initPermissionSettings, registerPermissionSettingsIpc } from './permissions'
 import { registerThreadIpc } from './thread'
+import { registerWidgetIpc, registerWidgetProtocol, registerWidgetScheme } from './widgets'
 import { createWindow, hardenWebContents, setupBrowsePermissions } from './window'
+
+// Custom schemes must be declared before the app is ready.
+registerWidgetScheme()
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
@@ -48,8 +52,10 @@ app.whenReady().then(async () => {
   // Reopen the folder from last time if it still exists.
   await initFolderRoot()
 
+  registerWidgetProtocol()
   registerCanvasIpc()
   registerNoteIpc()
+  registerWidgetIpc()
   registerFileIpc()
   registerThreadIpc()
   registerFolderIpc()

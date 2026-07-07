@@ -41,7 +41,13 @@ export interface PersistedMessage {
   role: 'user' | 'assistant'
   text: string
   uuid?: string // SDK assistant-message uuid — the fork anchor (resumeSessionAt)
-  kind?: 'research-spawn' | 'research-done' | 'computer-action'
+  // 'widget-inline' renders a sandboxed HTML block inside the transcript at
+  // this point (show_inline_widget) — widgetId points at its served document.
+  kind?: 'research-spawn' | 'research-done' | 'computer-action' | 'widget-action' | 'widget-inline'
+  /** widget-inline only: the .canvas/widgets/<id>.html this block renders. */
+  widgetId?: string
+  /** widget-inline only: the block's height in px. */
+  height?: number
 }
 
 /** One snapshot of a note's content. The live content is the note's .md file;
@@ -74,8 +80,11 @@ export interface ForkRef {
 // card). 'label' nodes are free-floating text on the canvas — their text rides
 // the `title` field (a label has no name distinct from its text), and the box's
 // width/height drive wrapping and an auto-fit font size.
+// 'widget' nodes are AI-authored HTML cards rendered in a sandboxed iframe
+// (served via the widget:// protocol); their HTML lives in
+// .canvas/widgets/<nodeId>.html, hydrated on load like a note's body.
 // The kind keeps its original name so existing canvas.json files load.
-export type NodeKind = 'chat' | 'note' | 'research' | 'file' | 'link' | 'label'
+export type NodeKind = 'chat' | 'note' | 'research' | 'file' | 'link' | 'label' | 'widget'
 
 export interface PersistedNode {
   id: string
@@ -102,6 +111,9 @@ export interface PersistedNode {
   messages?: PersistedMessage[]
   // Hydrated from the note's file on load; never written into canvas.json.
   content?: string
+  // Widget nodes: the card's HTML, hydrated from .canvas/widgets/<nodeId>.html
+  // on load; never written into canvas.json.
+  html?: string
   // Hydrated from the note's .versions.json sidecar on load; never written
   // into canvas.json (history is large and saves alongside the .md instead).
   noteVersions?: NoteVersion[]
@@ -248,6 +260,16 @@ export interface ContextLink {
   content?: string
 }
 
+/** A widget wired to a chat by a context edge — its HTML rides the system
+ *  prompt so the model can see (and update_widget) what's already on the
+ *  canvas instead of authoring duplicates. */
+export interface ContextWidget {
+  id: string
+  title: string
+  /** The widget's current HTML, truncated by the renderer. */
+  html: string
+}
+
 /** The browser tab a computer-use turn drives — resolved by the renderer at
  *  send time from the chat's wired link nodes (the first with a live <webview>
  *  guest). Main re-validates the id: only a guest in the browse partition may
@@ -287,6 +309,8 @@ export interface ThreadSendArgs {
   contextFiles?: ContextFile[]
   /** Links (web pages) connected to this chat by context edges. */
   contextLinks?: ContextLink[]
+  /** Widgets connected to this chat by context edges. */
+  contextWidgets?: ContextWidget[]
   /** Notes this chat may write, wired by output edges (chat → note). Their
    *  content rides the system prompt like contextNotes, but the chat is also
    *  told it may edit the files; main mirrors and versions any change back. */
@@ -345,6 +369,25 @@ export type ThreadEvent =
   // scroll, …). text is the human-readable description for the inline chip;
   // targetId is the driven link node.
   | { nodeId: string; type: 'computer-action'; targetId: string; text: string }
+  // The turn created a widget (create_widget tool) — main already persisted
+  // its HTML; the renderer spawns the node near the chat and wires it.
+  | {
+      nodeId: string
+      type: 'widget-created'
+      widgetId: string
+      title: string
+      html: string
+      width?: number
+      height?: number
+    }
+  // The turn rewrote an existing widget's HTML (update_widget tool).
+  | { nodeId: string; type: 'widget-updated'; widgetId: string; html: string; title?: string }
+  // The turn pushed a payload into a live widget (set_widget_data tool) —
+  // delivered to the widget's canvas.on('data') handler, no HTML rewrite.
+  | { nodeId: string; type: 'widget-data'; widgetId: string; payload: unknown }
+  // The turn rendered an inline widget (show_inline_widget) — the renderer
+  // appends a widget-inline message to the transcript at this point.
+  | { nodeId: string; type: 'widget-inline'; widgetId: string; height?: number }
   | { nodeId: string; type: 'permission'; request: PermissionRequest }
   // The request settled (user clicked, or the turn was aborted) — dismiss the prompt.
   | { nodeId: string; type: 'permission-resolved'; requestId: string }

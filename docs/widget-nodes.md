@@ -1,5 +1,23 @@
 # Widget Nodes — AI-authored HTML cards with a message bus
 
+> **Status (2026-07-06): implemented** through all five milestones. Notable
+> deltas from the plan below: a widget's `packages`/`net` grants persist as a
+> `<!--#widget {...}-->` header line in its own .html file (no sidecar — the
+> serving protocol and the fetch broker both read it from disk, so the
+> renderer can't widen a grant); the shelf is NOT vendored — npm packages are
+> fetched from the CDN on first use, verified against sha256 hashes pinned in
+> `WIDGET_PKGS` (main/widgets.ts), and cached in userData (only `canvas-ui`,
+> our own CSS, ships with the app); `set_widget_data` shipped as a third tool. Widget pinning/memory remains
+> deferred, as does `show_inline_widget`.
+>
+> **Scope-down (same day):** the message bus shipped as widget↔chat ONLY.
+> Tab routing (`seek`/`play`/`navigate`), widget→widget `data`, the chat's
+> `draft` type, and wiring-to-tabs-at-birth were all built and then cut to
+> keep the MVP surface minimal — a widget's one counterparty is its chat.
+> §§5–7 below describe the fuller bus as designed; treat them as the
+> re-expansion plan (the router, accepts-table shape, and guest-exec path
+> are known-good — they lived in the tree for an afternoon).
+
 A plan for a `widget` node type: a sandboxed HTML/CSS/JS card that a chat's agent
 one-shots mid-turn to visualize data or offer interaction — and a small typed
 **message bus** so widget clicks can drive other nodes (seek a YouTube tab,
@@ -87,14 +105,17 @@ inline scripts. Cleaner: register a custom scheme in main —
 `widget://<nodeId>` serves `.canvas/widgets/<id>.html` with its own headers:
 
 ```
-Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline';
-  style-src 'unsafe-inline'; img-src data:; font-src data:
+Content-Security-Policy: default-src 'none';
+  script-src 'unsafe-inline' widget-pkg:;
+  style-src 'unsafe-inline' widget-pkg:;
+  img-src data: widget-tile:; font-src data: widget-pkg:
 ```
 
-That gives widgets inline JS/CSS and data-URI images, and **no network at
-all** — no exfiltration channel, no CDN flakiness, matches "single one-shot
-file" authoring. (Fallback if the custom scheme misbehaves with sandboxed
-iframes: blob URL + relaxed frame-src.)
+That gives widgets inline JS/CSS, data-URI images, and the vendored package /
+tile-proxy schemes (§4) — and **no direct network at all**: no exfiltration
+channel, no CDN flakiness, matches "single one-shot file" authoring. (Fallback
+if the custom scheme misbehaves with sandboxed iframes: blob URL + relaxed
+frame-src.)
 
 **The bridge.** Before serving, the protocol handler prepends a tiny runtime
 shim so every widget gets the same API:
@@ -104,6 +125,7 @@ window.canvas = {
   send(msg)            // {type, ...payload} → parent via postMessage
   prompt(text)         // sugar for send({type:'prompt', text})
   on(type, handler)    // inbound data pushes from the app
+  fetch(url, opts?)    // brokered network: postMessage → main, allowlist-checked (§4)
 }
 ```
 
@@ -119,7 +141,7 @@ wired via `mcpServers` at thread.ts:703; events emitted like `computer-action`).
 
 New in-process server `mcp__canvas__*` with two tools:
 
-- `create_widget({ title, html, width?, height?, connect? })` → returns
+- `create_widget({ title, html, width?, height?, connect?, packages?, net? })` → returns
   `{ widgetId }`. Main persists the HTML, then emits a ThreadEvent
   (`type: 'widget-created'`); events.ts spawns the node near the chat (free-spot
   placement), wires context edges, drops a chip in the transcript (like
@@ -137,12 +159,64 @@ don't carry node ids. Add `id="…"` to note/link/file/chat context blocks so th
 model can address `connect` targets and message recipients precisely.
 
 **Prompting**: the tool description carries the authoring contract — single
-self-contained HTML document, inline CSS/JS only, no external resources (CSP
-will eat them), the `window.canvas` API with examples, and the message types
-connected nodes accept (see §4). Auto-allow both tools in `canUseTool` —
-they're sandboxed and reversible, no permission pill needed.
+self-contained HTML document, inline CSS/JS plus declared packages only, no
+external resources (CSP will eat them), the `window.canvas` API with examples,
+the package shelf with pinned versions (§4), and the message types connected
+nodes accept (see §5). Auto-allow both tools in `canUseTool` — they're
+sandboxed and reversible, no permission pill needed.
 
-## 4. The message bus
+## 4. Packages & capabilities
+
+Raw one-shot JS caps what widgets can be (hand-rolled SVG maps, reinvented
+chart code, all inside the size cap). The fix is **not** CDN access — that
+deletes the no-egress sandbox and makes rendering non-deterministic. The
+structure: **code is vendored and pinned; data is brokered and allowlisted.**
+
+**A curated standard library, vendored locally.** `create_widget` takes
+`packages: ['leaflet', 'chart']`. Package files ship with the app (or are
+fetched once, hash-pinned, into app data) and are served via a dedicated
+scheme — `widget-pkg://leaflet@1.9.4/leaflet.js` — injected as plain
+`<script>`/`<link>` tags next to the bridge shim before the widget's HTML.
+CSP allows `widget-pkg:` and nothing else. Properties: no network at render
+time, no CDN flakiness, no exfiltration, and a widget from months ago renders
+identically because its dependencies never move.
+
+Two authoring choices that drive one-shot reliability:
+- **Pin versions the model knows cold** (Leaflet 1.9, Chart.js 4, D3 7) and
+  list the shelf + one-line usage notes in the tool description — no
+  hallucinated imports.
+- **Classic script-tag globals** (`L`, `Chart`, `d3`), not ESM/import maps —
+  what models write most reliably in single-file HTML.
+
+v1 shelf: `chart` (Chart.js), `leaflet`, `d3`, `dayjs`, `markdown`
+(markdown-it + DOMPurify), and — most product-important — **`canvas-ui`**: a
+small CSS file of the app's own design tokens (paper fill, palette, header
+typography) so widgets look native to the canvas and the model writes less CSS.
+
+**Network is a capability, not a CSP hole.** Invariant: widget code never
+touches the network directly; all data flows through main, where policy lives.
+(This is the `net.fetch` service self-modifying-nodes.md Part 3 anticipated.)
+Two mechanisms:
+
+1. **Tile proxy** — maps need tiles at pan/zoom time. `img-src widget-tile:`;
+   main proxies and caches OSM tiles. The iframe still has zero direct
+   network, and cached areas work offline.
+2. **`canvas.fetch(url)`** — for live data (tides, weather, JSON APIs). Rides
+   postMessage to the host; main checks the URL against the widget's declared
+   allowlist (`net: ['api.tidesandcurrents.noaa.gov']`, set at creation,
+   surfaced to the user), then fetches and returns data. Main is the choke
+   point: log, cache, rate-limit, deny. A prompt-injected widget can't beacon
+   note content to evil.com because that host was never granted.
+
+**Why curated beats open**: every shelf entry is a promise the model can keep,
+and ~a dozen packages cover charts, maps, tables, timelines, diagrams, and
+markdown. A fixed shelf also allows per-package prompt tuning ("for maps,
+default to Leaflet + the tile proxy"). Escape hatches for the long tail:
+inline small vendored snippets, or — per the graduation path — promote a
+recurring pattern into a real node type. Recurring package requests are the
+signal to grow the shelf.
+
+## 5. The message bus
 
 Widget messages route along **existing context edges** — an edge is the
 authorization to message, per self-modifying-nodes Part 2. No new edge kind.
@@ -157,25 +231,27 @@ message type. MVP accepts-table is hardcoded per node kind:
 | link | `play` / `pause` | same, via the guest's `<video>` |
 | link | `navigate {url}` | `webview.loadURL` (same-hostname only, else ignored) |
 | chat | `prompt {text}` | fills the composer draft **and sends** as a user turn, rendered with a "from widget" chip; blocked while the chat is streaming (per-node send lock) |
-| chat | `draft {text}` | fills the composer only — for "let the user edit before sending" |
 | widget | `data {payload}` | delivered to the target widget's `canvas.on('data')` |
+
+(A `draft` type — fill the composer without sending — was built and then cut
+2026-07-06: unused weight next to `prompt`.)
 
 Chat→widget data flow without full HTML rewrites comes later as
 `set_widget_data(widgetId, json)` → bridge dispatches to `canvas.on('data')`
-(nice-to-have, milestone 4).
+(nice-to-have, milestone 5).
 
 One hop only, no transitive routing, no loops: a message a widget sends is
 never re-emitted by a receiver. If two tabs are wired, both seek — that's the
 user's wiring, honored literally.
 
-## 5. Chat context integration
+## 6. Chat context integration
 
 `contextWidgetsFor(id)` in helpers.ts (peersOf ∩ isWidget), assembled into the
 system prompt as `<widget id=… title=…>` blocks carrying the widget's HTML
 (truncated past ~8–16KB) — so the agent can see, reference, and `update_widget`
 what's already on the canvas instead of authoring duplicates.
 
-## 6. YouTube walkthrough (the acceptance test)
+## 7. YouTube walkthrough (the acceptance test)
 
 Setup: chat ⟷ YouTube link node (context edge), user asks for an interactive
 timestamped summary.
@@ -195,30 +271,38 @@ timestamped summary.
 5. User clicks "explain this section" (a `canvas.prompt(...)` button) → the
    chat sends a user turn; the reply can `update_widget` to enrich that row.
 
-## 7. Security posture
+## 8. Security posture
 
 - Opaque-origin iframe, `sandbox="allow-scripts"` only. No `allow-same-origin`,
   `allow-popups`, `allow-top-navigation`, ever.
-- CSP `default-src 'none'` at the protocol layer: no network egress even though
-  prompt-injected page content (the YouTube page!) flows into widget HTML.
-  Exfiltration via message bus is bounded by the accepts-table (`navigate` is
-  same-hostname; `prompt` is visible in the transcript as a user turn).
+- CSP `default-src 'none'` (+ `widget-pkg:`/`widget-tile:` schemes only) at the
+  protocol layer: no direct network egress even though prompt-injected page
+  content (the YouTube page!) flows into widget HTML. Exfiltration via message
+  bus is bounded by the accepts-table (`navigate` is same-hostname; `prompt`
+  is visible in the transcript as a user turn).
+- Brokered network (`canvas.fetch`) is bounded by the per-widget `net`
+  allowlist, enforced in main, declared at creation and visible to the user.
+  Tile requests carry no widget-controlled payload beyond z/x/y coordinates.
 - Parent validates `event.source`, schema-checks every message, rate-limits.
 - Widget crash = its frame dies; the node shows a "reload" state (error
   boundary at the card level). Nothing touches canvas.json integrity.
 
-## 8. Milestones (each independently shippable)
+## 9. Milestones (each independently shippable)
 
 1. **The node** — type/factory/view/persistence/hydration; sandboxed frame via
    `widget://` protocol; hand-written test widget renders, resizes, survives
    restart. No AI, no messages.
 2. **The tool** — `canvas` MCP server, `create_widget`/`update_widget`,
    `widget-created` events → spawn + wire + chip; authoring contract in tool
-   description; ids added to context blocks. Acceptance: "make me a widget
-   showing this data as a bar chart" works end-to-end.
+   description; ids added to context blocks; starter shelf via `widget-pkg:`
+   (`canvas-ui` + `chart`). Acceptance: "make me a widget showing this data as
+   a bar chart" works end-to-end, styled like the canvas.
 3. **The bus** — bridge shim, router, link `seek/play/navigate` + chat
-   `prompt/draft` handlers. Acceptance: the YouTube walkthrough (§6).
-4. **Polish** — `contextWidgetsFor` context blocks, `set_widget_data`, pinning
+   `prompt/draft` handlers. Acceptance: the YouTube walkthrough (§7).
+4. **Capabilities** — full shelf (`leaflet`, `d3`, `dayjs`, `markdown`), tile
+   proxy, `canvas.fetch` + `net` allowlist. Acceptance: an interactive beach
+   map of Tomales Bay with live tide data, fully offline-tolerant for tiles.
+5. **Polish** — `contextWidgetsFor` context blocks, `set_widget_data`, pinning
    (description blurb in MEMORY.md), widget→widget `data` messages.
 
 ## Open questions
@@ -229,3 +313,14 @@ timestamped summary.
 - Widget HTML size cap (tool arg validation) — 64KB feels right for one-shots.
 - Does a pinned widget belong in memory at all, or is a widget always ephemeral
   scaffolding? Defer until real usage says.
+- Shelf contents beyond v1 (mermaid? vega-lite? a table/grid lib?) — grow only
+  on observed demand; every entry is a promise to keep.
+- Should `canvas.fetch` grants prompt the user per-host on first use (a
+  permission chip like Bash approvals) or ride silently in the creation chip?
+- `show_inline_widget` SHIPPED (2026-07-06): a transcript-embedded block —
+  same widget:// serving/sandbox/packages/fetch machinery, mounted inside a
+  `widget-inline` transcript message instead of a canvas card, `prompt`
+  routed to the hosting chat. Heuristic given to the model: inline if the
+  visual is part of this answer; canvas widget if it's an artifact to keep,
+  revisit, or interact with beyond this reply. Promotion (drag an inline
+  block out into a full node) remains future work.

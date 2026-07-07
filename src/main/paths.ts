@@ -46,6 +46,12 @@ export const clipFileFor = (root: string, nodeId: string): string =>
 // Its MEMORY.md link target — relative to root, posix-style for the markdown.
 export const clipRelFor = (nodeId: string): string => `.canvas/clips/${nodeId}.md`
 
+// AI-authored widget cards: one HTML document per node, keyed by node id
+// (hidden metadata like thread transcripts — never in the user's file view).
+export const widgetsDirFor = (root: string): string => join(root, '.canvas', 'widgets')
+export const widgetFileFor = (root: string, nodeId: string): string =>
+  join(widgetsDirFor(root), `${nodeId}.html`)
+
 // Node ids come from the renderer over IPC — keep them path-segment safe.
 export const isSafeNodeId = (nodeId: string): boolean => /^[\w-]+$/.test(nodeId)
 

@@ -9,6 +9,7 @@ import {
   createComputerServer,
   describeComputerAction
 } from './computerUse'
+import { WIDGET_APPEND, createCanvasServer, widgetsAppend } from './canvasTools'
 import {
   BROWSE_PARTITION,
   DEFAULT_EFFORT,
@@ -285,6 +286,7 @@ export function registerThreadIpc(): void {
         contextNotes,
         contextFiles,
         contextLinks,
+        contextWidgets,
         outputNotes
       }: ThreadSendArgs
     ) => {
@@ -346,6 +348,9 @@ export function registerThreadIpc(): void {
           ? computer
           : null
       const computerServer = computerTarget ? createComputerServer(computerTarget) : null
+      // Chat turns get the canvas tools (create_widget/update_widget); note
+      // turns stay pointed at their one file.
+      const canvasServer = kind === 'note' ? null : createCanvasServer(root, nodeId, emit)
 
       if (computer) {
         console.log(
@@ -475,7 +480,7 @@ export function registerThreadIpc(): void {
                 .map((n) => {
                   const file = noteFiles.get(n.id)
                   const attrs =
-                    `title=${JSON.stringify(n.title)}` +
+                    `id=${JSON.stringify(n.id)} title=${JSON.stringify(n.title)}` +
                     (file ? ` file=${JSON.stringify(file)}` : '')
                   return `<note ${attrs}>\n${n.content}\n</note>`
                 })
@@ -531,8 +536,8 @@ export function registerThreadIpc(): void {
               liveLinks
                 .map(
                   (l) =>
-                    `<page title=${JSON.stringify(l.title)} url=${JSON.stringify(l.url)}>\n` +
-                    `${l.content}\n</page>`
+                    `<page id=${JSON.stringify(l.id)} title=${JSON.stringify(l.title)} ` +
+                    `url=${JSON.stringify(l.url)}>\n${l.content}\n</page>`
                 )
                 .join('\n')
             : '',
@@ -540,7 +545,9 @@ export function registerThreadIpc(): void {
             ? 'The user attached web pages to this conversation:\n' +
               fetchLinks
                 .map(
-                  (l) => `<page title=${JSON.stringify(l.title)} url=${JSON.stringify(l.url)} />`
+                  (l) =>
+                    `<page id=${JSON.stringify(l.id)} title=${JSON.stringify(l.title)} ` +
+                    `url=${JSON.stringify(l.url)} />`
                 )
                 .join('\n') +
               '\nBefore answering, fetch each attached page with WebFetch — unless this ' +
@@ -615,6 +622,8 @@ export function registerThreadIpc(): void {
           writableAppend,
           filesAppend,
           linksAppend,
+          canvasServer ? WIDGET_APPEND : '',
+          canvasServer ? widgetsAppend(contextWidgets ?? []) : '',
           memoryAppend,
           research ? RESEARCH_APPEND : '',
           // Off-state guidance skips note-editing turns — they never browse.
@@ -695,12 +704,20 @@ export function registerThreadIpc(): void {
               preset: 'claude_code',
               ...(systemAppend ? { append: systemAppend } : {})
             },
-            // The only MCP server a turn ever gets is the app's own in-process
-            // computer-use server (an SDK server object, not a spawned child) —
+            // The only MCP servers a turn ever gets are the app's own
+            // in-process ones (SDK server objects, not spawned children) —
             // external MCP connectors are deliberately unsupported so a turn
-            // can never start a process. The key is omitted when the toggle is
-            // off so the SDK doesn't advertise a dormant tool.
-            ...(computerServer ? { mcpServers: { computer: computerServer } } : {}),
+            // can never start a process. computer rides only when the toggle
+            // armed it (no dormant tool advertised); canvas (widgets) rides
+            // every chat turn.
+            ...(computerServer || canvasServer
+              ? {
+                  mcpServers: {
+                    ...(computerServer ? { computer: computerServer } : {}),
+                    ...(canvasServer ? { canvas: canvasServer } : {})
+                  }
+                }
+              : {}),
             ...(research
               ? {
                   agents: { researcher: RESEARCHER_DEF },
@@ -710,7 +727,15 @@ export function registerThreadIpc(): void {
                     'Agent',
                     'WebSearch',
                     'WebFetch',
-                    ...(computerServer ? ['mcp__computer__computer'] : [])
+                    ...(computerServer ? ['mcp__computer__computer'] : []),
+                    ...(canvasServer
+                      ? [
+                          'mcp__canvas__create_widget',
+                          'mcp__canvas__update_widget',
+                          'mcp__canvas__show_inline_widget',
+                          'mcp__canvas__set_widget_data'
+                        ]
+                      : [])
                   ],
                   forwardSubagentText: true
                 }
@@ -821,6 +846,11 @@ export function registerThreadIpc(): void {
               // tab — same contract as wiring a link consenting to its fetch.
               // Prompting per click would make browsing unusable.
               if (computerServer && toolName === 'mcp__computer__computer')
+                return { behavior: 'allow', updatedInput: input }
+              // Widget tools only touch .canvas/widgets and render in a
+              // sandboxed, no-network iframe — creating or revising a card is
+              // reversible and safe, so never prompt.
+              if (canvasServer && toolName.startsWith('mcp__canvas__'))
                 return { behavior: 'allow', updatedInput: input }
               // Global auto-allows answer without a prompt. (The note-file
               // guard above still wins for note sessions' edit tools.)

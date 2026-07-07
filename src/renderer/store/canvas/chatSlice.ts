@@ -12,6 +12,7 @@ import {
   isLabel,
   isLink,
   isNote,
+  isWidget,
   makeNode,
   makeNoteNode,
   uid,
@@ -292,8 +293,16 @@ export function createChatSlice(
       const b = s.nodes.find((n) => n.id === chatId)
       if (!a || !b || sourceId === chatId) return
       const connectable = (n: CanvasNode): boolean =>
-        isNote(n) || isFile(n) || isLink(n) || (isChat(n) && n.data.kind !== 'research')
+        isNote(n) ||
+        isFile(n) ||
+        isLink(n) ||
+        isWidget(n) ||
+        (isChat(n) && n.data.kind !== 'research')
       if (!connectable(a) || !connectable(b)) return
+      // MVP scope: a widget's one counterparty is a chat — the wire feeds the
+      // widget's HTML into the chat's context and authorizes prompt messages
+      // back. The at-least-one-chat rule below therefore also covers widgets
+      // (a widget⟷tab/note/file pair has no chat and is refused).
       if (!isChat(a) && !isChat(b)) return
       if (
         s.edges.some(
