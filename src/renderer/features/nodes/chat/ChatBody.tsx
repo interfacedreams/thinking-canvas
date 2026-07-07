@@ -78,7 +78,14 @@ function MessageView({
   return (
     <div data-msg={message.id} className="prose-chat mb-2 px-3 py-1">
       <Markdown
-        remarkPlugins={[remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}
+        remarkPlugins={[
+          // singleTilde: false — GFM's default treats ~text~ as strikethrough,
+          // but models write single tildes to mean "approximately" (~$170/mo);
+          // only real ~~strikethrough~~ should strike (GitHub's own behavior).
+          [remarkGfm, { singleTilde: false }],
+          remarkBreaks,
+          [remarkMath, { singleDollarTextMath: false }]
+        ]}
         rehypePlugins={[rehypeKatex]}
         components={markdownComponents}
       >

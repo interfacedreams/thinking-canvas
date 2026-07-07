@@ -104,7 +104,12 @@ export default function NoteBody({
             {viewed.content ? (
               <MarkdownSourceContext.Provider value={id}>
                 <Markdown
-                  remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: false }]]}
+                  remarkPlugins={[
+                    // singleTilde: false — ~approx~ must not render struck
+                    // through (see ChatBody); only real ~~strikethrough~~.
+                    [remarkGfm, { singleTilde: false }],
+                    [remarkMath, { singleDollarTextMath: false }]
+                  ]}
                   rehypePlugins={[rehypeKatex]}
                   components={markdownComponents}
                 >
