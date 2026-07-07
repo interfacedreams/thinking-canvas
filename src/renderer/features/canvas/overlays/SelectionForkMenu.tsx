@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { GitFork } from 'lucide-react'
+import { ViewportPortal, useReactFlow } from '@xyflow/react'
 import { useCanvasStore } from '@renderer/store/canvas'
 import { paletteFor } from '@renderer/lib/palette'
 
@@ -10,12 +11,18 @@ import { paletteFor } from '@renderer/lib/palette'
 // lands just right of the source with the highlighted text seeded into its
 // focused composer — the user continues typing their ask from it and sends.
 //
+// The button lives INSIDE the React Flow viewport (ViewportPortal), anchored
+// in flow coordinates as an offset from the source node's origin. Pan, zoom,
+// card drags, and gravity pushes all move it exactly like the cards — no
+// screen-space tracking needed. It scales with zoom like everything else on
+// the canvas.
+//
 // Webview pages live in a separate guest document, so their selections never
 // reach this host listener — they need a guest→host bridge and are handled
 // separately.
 
 // The composer seed: the bare passage, cursor right after it — the user
-// continues typing from the highlighted words. No quotes, no canned
+// continues typing their ask from the highlighted words. No quotes, no canned
 // instruction presuming what the ask is.
 function buildSeed(text: string): string {
   return text.replace(/\s+/g, ' ').trim().slice(0, 4000)
@@ -24,10 +31,13 @@ function buildSeed(text: string): string {
 interface Pending {
   nodeId: string
   text: string
-  // Selection bounds in screen px; the button pins to the top edge, centered.
-  cx: number
-  top: number
-  bottom: number
+  // Anchor as a flow-space offset from the source node's origin, so the
+  // button rides the node through drags. dy is the top edge when `below` is
+  // false, the bottom edge when the selection hugs the viewport top and the
+  // button flips underneath.
+  dx: number
+  dy: number
+  below: boolean
   accent: string
 }
 
@@ -37,6 +47,7 @@ const FORKABLE_SEL = '.select-text, .pdf-text-layer'
 
 export default function SelectionForkMenu(): React.JSX.Element | null {
   const forkWithDraft = useCanvasStore((s) => s.forkWithDraft)
+  const { screenToFlowPosition } = useReactFlow()
   const [pending, setPending] = useState<Pending | null>(null)
 
   // Recompute on every selection change. A collapsed/empty selection, or one
@@ -63,26 +74,34 @@ export default function SelectionForkMenu(): React.JSX.Element | null {
 
       const rect = range.getBoundingClientRect()
       if (rect.width === 0 && rect.height === 0) return setPending(null)
+
+      // Sit above the selection; flip below when it hugs the top of the
+      // viewport at selection time (a fixed button would land offscreen).
+      const below = rect.top < 56
+      const cx = rect.left + rect.width / 2
+      const anchor = screenToFlowPosition({ x: cx, y: below ? rect.bottom : rect.top })
       setPending({
         nodeId,
         text,
-        cx: rect.left + rect.width / 2,
-        top: rect.top,
-        bottom: rect.bottom,
+        dx: anchor.x - node.position.x,
+        dy: anchor.y - node.position.y,
+        below,
         accent: paletteFor(node.data.color).accent
       })
     }
     document.addEventListener('selectionchange', onSelect)
     return () => document.removeEventListener('selectionchange', onSelect)
-  }, [])
+  }, [screenToFlowPosition])
 
-  // A pan or zoom moves the text out from under a screen-pinned button — drop it
-  // rather than let it drift. (selectionchange keeps it live for normal edits.)
+  // The anchor is an offset from the NODE, but the selection lives in the
+  // node's scrollable body — scrolling inside the card moves the text without
+  // moving the node. Drop the button rather than let it detach. (Canvas pans
+  // are transform-based and never fire scroll events, so they don't hide it.)
   useEffect(() => {
     if (!pending) return
     const hide = (): void => setPending(null)
-    window.addEventListener('wheel', hide, { passive: true })
-    return () => window.removeEventListener('wheel', hide)
+    document.addEventListener('scroll', hide, { capture: true, passive: true })
+    return () => document.removeEventListener('scroll', hide, { capture: true })
   }, [pending])
 
   // Deleting the source node removes the selected DOM without reliably firing
@@ -95,7 +114,13 @@ export default function SelectionForkMenu(): React.JSX.Element | null {
     if (nodeGone) setPending(null)
   }, [nodeGone])
 
-  if (!pending || nodeGone) return null
+  // The live node position — updates every frame of a drag or gravity push,
+  // carrying the button along with the card.
+  const nodePos = useCanvasStore((s) =>
+    pending ? s.nodes.find((n) => n.id === pending.nodeId)?.position : undefined
+  )
+
+  if (!pending || !nodePos || nodeGone) return null
 
   const fork = (): void => {
     forkWithDraft(pending.nodeId, buildSeed(pending.text))
@@ -103,27 +128,36 @@ export default function SelectionForkMenu(): React.JSX.Element | null {
     window.getSelection()?.removeAllRanges()
   }
 
-  // Sit above the selection; flip below when it hugs the top of the viewport.
-  const below = pending.top < 56
-  const y = below ? pending.bottom + 8 : pending.top - 8
-
   return (
-    <button
-      type="button"
-      // Preserve the selection through the click — a mousedown elsewhere would
-      // otherwise collapse it before onClick reads pending.text.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={fork}
-      style={{
-        left: pending.cx,
-        top: y,
-        backgroundColor: pending.accent,
-        transform: `translateX(-50%) translateY(${below ? '0' : '-100%'})`
-      }}
-      className="fixed z-[1100] flex items-center gap-1.5 rounded-full border-2 border-white px-3 py-1.5 text-[13px] font-medium text-white shadow-md transition-transform hover:brightness-110"
-    >
-      <GitFork className="h-4 w-4" />
-      Fork
-    </button>
+    <ViewportPortal>
+      <div
+        style={{
+          position: 'absolute',
+          transform: `translate(${nodePos.x + pending.dx}px, ${nodePos.y + pending.dy}px)`,
+          zIndex: 1100,
+          pointerEvents: 'all'
+        }}
+      >
+        <button
+          type="button"
+          // Preserve the selection through the click — a mousedown elsewhere
+          // would otherwise collapse it before onClick reads pending.text. The
+          // stop keeps React Flow's pane from treating it as a pan/select start.
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+          }}
+          onClick={fork}
+          style={{
+            backgroundColor: pending.accent,
+            transform: `translateX(-50%) translateY(${pending.below ? '8px' : 'calc(-100% - 8px)'})`
+          }}
+          className="nopan nodrag flex items-center gap-1.5 rounded-full border-2 border-white px-3 py-1.5 text-[13px] font-medium whitespace-nowrap text-white shadow-md hover:brightness-110"
+        >
+          <GitFork className="h-4 w-4" />
+          Fork
+        </button>
+      </div>
+    </ViewportPortal>
   )
 }
