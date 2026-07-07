@@ -1,6 +1,6 @@
 {
   "name": "thinking-canvas",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Local-repo-native agentic research canvas",
   "main": "./out/main/index.js",
   "scripts": {
