@@ -42,7 +42,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
   const deleteChat = useCanvasStore((s) => s.deleteChat)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
-  const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const tapCtxKnob = useCanvasStore((s) => s.tapCtxKnob)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   // Shift held: float a transparent host-DOM layer over the live <webview> so a
   // shift+click on the page surfaces as a normal DOM click (the guest otherwise
@@ -143,7 +143,7 @@ function LinkNodeView({ id, data, selected }: NodeProps<LinkNode>): React.JSX.El
           // keep the tap from reaching the overlay's window listener,
           // which treats any stray click as cancel
           e.stopPropagation()
-          setCtxConnectSource(armed ? null : id)
+          tapCtxKnob(id)
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{

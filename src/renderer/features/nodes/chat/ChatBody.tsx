@@ -19,6 +19,7 @@ import { useCanvasStore, isChat, type Message } from '@renderer/store/canvas'
 import { useForwardedWheel } from '@renderer/lib/useForwardedWheel'
 import { MarkdownSourceContext, markdownComponents } from '@renderer/lib/markdownLink'
 import PermissionPrompt from '@renderer/features/settings/PermissionPrompt'
+import Tooltip from '@renderer/ui/Tooltip'
 
 function MessageView({
   message,
@@ -260,30 +261,38 @@ const ChatBody = forwardRef<
           />
           <div className="flex items-center justify-between px-2 pb-1.5">
             <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => toggleResearch(id)}
-                title="Research mode: spawn parallel web researchers for this message"
-                className={`rounded-md p-1 transition-colors ${
-                  data.researchArmed
-                    ? 'bg-(--np-accent) text-white'
-                    : 'text-neutral-400 hover:text-neutral-600'
-                }`}
+              <Tooltip
+                label="Research mode: spawn parallel web researchers for this message"
+                side="top"
               >
-                <Telescope className="h-5 w-5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleComputer(id)}
-                title="Computer use: Claude drives a browser tab connected to this chat — clicks, typing, scrolling"
-                className={`rounded-md p-1 transition-colors ${
-                  data.computerArmed
-                    ? 'bg-(--np-accent) text-white'
-                    : 'text-neutral-400 hover:text-neutral-600'
-                }`}
+                <button
+                  type="button"
+                  onClick={() => toggleResearch(id)}
+                  className={`rounded-md p-1 transition-colors ${
+                    data.researchArmed
+                      ? 'bg-(--np-accent) text-white'
+                      : 'text-neutral-400 hover:text-neutral-600'
+                  }`}
+                >
+                  <Telescope className="h-5 w-5" />
+                </button>
+              </Tooltip>
+              <Tooltip
+                label="Computer use: Claude drives a browser tab connected to this chat — clicks, typing, scrolling"
+                side="top"
               >
-                <MousePointerClick className="h-5 w-5" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => toggleComputer(id)}
+                  className={`rounded-md p-1 transition-colors ${
+                    data.computerArmed
+                      ? 'bg-(--np-accent) text-white'
+                      : 'text-neutral-400 hover:text-neutral-600'
+                  }`}
+                >
+                  <MousePointerClick className="h-5 w-5" />
+                </button>
+              </Tooltip>
             </div>
             <button
               type="button"

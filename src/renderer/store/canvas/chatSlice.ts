@@ -21,6 +21,7 @@ import type { CanvasNode, Message } from './model'
 import type { CanvasState } from './state'
 import { generateTitle, titleFromText } from './titling'
 import type { StoreCtx } from './helpers'
+import { pendingGravitySeeds } from './runtime'
 
 export function createChatSlice(
   ctx: StoreCtx
@@ -118,6 +119,7 @@ export function createChatSlice(
         edges: [...s.edges, edge]
       }))
       persist()
+      pendingGravitySeeds.add(node.id)
       return node.id
     },
 
@@ -215,6 +217,7 @@ export function createChatSlice(
         ]
       }))
       persist()
+      pendingGravitySeeds.add(node.id)
 
       // The editing turn writes by node id, so the file can stay "Untitled"
       // (create allocates it, suffixing to dodge collisions); once the turn

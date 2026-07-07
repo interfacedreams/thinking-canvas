@@ -21,6 +21,11 @@ export interface CanvasState {
   setModel: (model: ModelId) => void
   effort: EffortId // thinking effort for new turns; persisted app-wide in localStorage
   setEffort: (effort: EffortId) => void
+  // Gravity auto layout: placing, dropping, or growing a card pushes the cards
+  // it overlaps out of the way (see store/canvas/autoLayout). App-wide toggle,
+  // persisted in localStorage like model/effort.
+  autoLayout: boolean
+  setAutoLayout: (on: boolean) => void
   // Runtime-only: per node, the y-offset (flow px from the node top) of each
   // message that an edge anchors on — measured from the DOM by ChatNodeView so
   // fork edges can attach to the message itself rather than the node center.
@@ -47,6 +52,11 @@ export interface CanvasState {
   // until a click on a chat commits the edge — or any other click / Esc cancels.
   ctxConnectSource: string | null
   setCtxConnectSource: (id: string | null) => void
+  // A tap on a node's knob. Nothing armed: arm this node. This node armed:
+  // disarm (toggle). Another node armed: commit the connection when the pair
+  // is valid (knob-to-knob is the natural gesture — the pending arrow snaps
+  // right onto the target's knob), otherwise re-arm from this knob.
+  tapCtxKnob: (id: string) => void
   // Runtime-only: shift-click-to-connect. Holding Shift and clicking two nodes
   // in source→target order wires the edge their kinds allow (chat→note output,
   // resource→chat context). The ordered tally lives here, not in a component

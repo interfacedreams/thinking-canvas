@@ -14,6 +14,7 @@ import {
   CLAUDE_MD_ID,
   CLAUDE_MD_POS,
   GAP,
+  KNOB_CLEARANCE,
   NODE_W,
   boxOf,
   fileFrame,
@@ -31,7 +32,8 @@ import {
 } from './model'
 import type { CanvasNode, ChatNode, FileNode, NoteNode, PendingFile } from './model'
 import type { CanvasState } from './state'
-import { noteSaveTimers, pendingFileInjections } from './runtime'
+import { animateMoves, resolveCollisions, settleMoves, type GravityBias } from './autoLayout'
+import { noteSaveTimers, pendingFileInjections, pendingGravitySeeds } from './runtime'
 
 // Debounced layout save (canvas.json) — one timer for the whole canvas.
 let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -410,7 +412,8 @@ export function createStoreHelpers(
   const spawnComputerTab = (chat: ChatNode): string => {
     const p = boxOf(chat)
     const node = makeLinkNode(
-      { x: p.x - GAP - COMPUTER_TAB.width, y: p.y },
+      // Knob clearance too, so auto layout has nothing to resolve here.
+      { x: p.x - GAP - KNOB_CLEARANCE - COMPUTER_TAB.width, y: p.y },
       {
         color: nextColor(),
         updatedAt: Date.now(),
@@ -426,6 +429,7 @@ export function createStoreHelpers(
       edges: [...s.edges, { id: uid(), source: node.id, target: chat.id, kind: 'context' as const }]
     }))
     persist()
+    pendingGravitySeeds.add(node.id)
     return node.id
   }
 
@@ -525,6 +529,33 @@ export function createStoreHelpers(
     })()
   }
 
+  // Landing spot for a gravity glide frame — never fights a live drag.
+  const applyMoves = (positions: Map<string, { x: number; y: number }>): void => {
+    set((s) => ({
+      nodes: s.nodes.map((n) => {
+        const p = positions.get(n.id)
+        return p && !n.dragging ? { ...n, position: p } : n
+      })
+    }))
+  }
+
+  // Gravity auto layout: push whatever the seed nodes overlap out of the way
+  // (see autoLayout.ts — the seeds themselves never move). A no-op unless the
+  // toggle is on or nothing overlaps; pushed cards glide to their spots and
+  // the layout persists once they settle.
+  const applyGravity = (seedIds: string[], bias: GravityBias = 'radial'): void => {
+    if (!get().autoLayout) return
+    settleMoves(applyMoves) // a pass arriving mid-glide finishes the prior one first
+    const moves = resolveCollisions(get().nodes, new Set(seedIds), bias)
+    if (moves.size === 0) return
+    const from = new Map(
+      get()
+        .nodes.filter((n) => moves.has(n.id))
+        .map((n) => [n.id, n.position])
+    )
+    animateMoves(from, moves, applyMoves, persist)
+  }
+
   // A fresh node takes over keyboard focus (focusDraft) and clears everyone
   // else's selection. Whether it grabs the React Flow *selection* depends on the
   // view: on the bare canvas it stays unselected, because a selected newborn
@@ -539,6 +570,11 @@ export function createStoreHelpers(
       nodes: [...s.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)), placed]
     }))
     persist()
+    // The newborn is the gravity seed: it stays exactly where it was placed
+    // (so post-spawn centering still lands on it) and shoves whatever it
+    // overlaps out of the way. The push waits for its first measurement —
+    // pushing now would use the height estimate (see pendingGravitySeeds).
+    pendingGravitySeeds.add(placed.id)
     return placed
   }
 
@@ -616,6 +652,7 @@ export function createStoreHelpers(
     flushSave,
     switchFolder,
     anyStreaming,
+    applyGravity,
     isClaudeMd,
     transcriptBlock,
     withPageContent,

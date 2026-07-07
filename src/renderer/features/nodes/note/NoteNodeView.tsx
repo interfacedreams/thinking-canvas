@@ -40,7 +40,7 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
   const discardNode = useCanvasStore((s) => s.discardNode)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const clearFocusDraft = useCanvasStore((s) => s.clearFocusDraft)
-  const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const tapCtxKnob = useCanvasStore((s) => s.tapCtxKnob)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const setViewVersion = useCanvasStore((s) => s.setViewVersion)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
@@ -190,7 +190,7 @@ function NoteNodeView({ id, data, selected, height }: NodeProps<NoteNode>): Reac
           // keep the tap from reaching the overlay's window listener,
           // which treats any stray click as cancel
           e.stopPropagation()
-          setCtxConnectSource(armed ? null : id)
+          tapCtxKnob(id)
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{

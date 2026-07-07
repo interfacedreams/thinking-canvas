@@ -42,7 +42,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
   const deleteChat = useCanvasStore((s) => s.deleteChat)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
-  const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const tapCtxKnob = useCanvasStore((s) => s.tapCtxKnob)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   const { docked, mode, open, collapse } = usePanel(id)
 
@@ -121,7 +121,7 @@ function FileNodeView({ id, data, selected }: NodeProps<FileNode>): React.JSX.El
           // keep the tap from reaching the overlay's window listener,
           // which treats any stray click as cancel
           e.stopPropagation()
-          setCtxConnectSource(armed ? null : id)
+          tapCtxKnob(id)
         }}
         className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
         style={{

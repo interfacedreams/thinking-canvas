@@ -1,9 +1,10 @@
 import { applyNodeChanges } from '@xyflow/react'
-import { isFile, isLink, isNote, measureImage } from './model'
+import { isFile, isLabel, isLink, isNote, measureImage } from './model'
 import type { CanvasNode } from './model'
 import type { CanvasState } from './state'
 import type { StoreCtx } from './helpers'
-import { EFFORT_STORAGE_KEY, MODEL_STORAGE_KEY } from './prefs'
+import { AUTO_LAYOUT_STORAGE_KEY, EFFORT_STORAGE_KEY, MODEL_STORAGE_KEY } from './prefs'
+import { pendingGravitySeeds } from './runtime'
 
 export function createViewSlice(
   ctx: StoreCtx
@@ -13,12 +14,14 @@ export function createViewSlice(
   | 'armContextChat'
   | 'startFilePlacement'
   | 'setCtxConnectSource'
+  | 'tapCtxKnob'
   | 'shiftConnect'
   | 'resetShiftConnect'
   | 'setShiftHeld'
   | 'setTransforming'
   | 'setModel'
   | 'setEffort'
+  | 'setAutoLayout'
   | 'expandNode'
   | 'collapseExpanded'
   | 'setAnchorOffsets'
@@ -26,7 +29,13 @@ export function createViewSlice(
   | 'setViewport'
   | 'toggleMinimize'
 > {
-  const { set, get, persist } = ctx
+  const { set, get, persist, applyGravity } = ctx
+  // Gravity bookkeeping: which nodes are mid-drag (their drop reseeds a radial
+  // push), and a trailing throttle that batches streamed height growth into a
+  // downward push every ~quarter second instead of one per measured frame.
+  const draggingIds = new Set<string>()
+  const growthSeeds = new Set<string>()
+  let growthTimer: ReturnType<typeof setTimeout> | undefined
   return {
     // The pending image lives and dies with file-placement mode. Any re-arm or
     // cancel also drops a pending context source — it only rides a C-armed chat.
@@ -70,6 +79,28 @@ export function createViewSlice(
     },
 
     setCtxConnectSource: (id) => set({ ctxConnectSource: id }),
+
+    tapCtxKnob: (id) => {
+      const src = get().ctxConnectSource
+      if (src && src !== id) {
+        // Armed from another node — this tap is the landing half of the
+        // gesture. addContextEdge validates (and no-ops a dup); an edge
+        // landing (or already existing) means the pair was valid, so the
+        // gesture is complete — disarm. An invalid pair (two resources)
+        // falls through to re-arm from this knob instead.
+        get().addContextEdge(src, id)
+        const connected = get().edges.some(
+          (e) =>
+            (e.kind === 'context' || e.kind === 'output') &&
+            ((e.source === src && e.target === id) || (e.source === id && e.target === src))
+        )
+        if (connected) {
+          set({ ctxConnectSource: null })
+          return
+        }
+      }
+      set({ ctxConnectSource: src === id ? null : id })
+    },
 
     shiftConnect: (id) => {
       const picks = get().shiftPicks
@@ -132,6 +163,11 @@ export function createViewSlice(
       localStorage.setItem(EFFORT_STORAGE_KEY, effort)
     },
 
+    setAutoLayout: (on) => {
+      set({ autoLayout: on })
+      localStorage.setItem(AUTO_LAYOUT_STORAGE_KEY, String(on))
+    },
+
     expandNode: (id, mode = 'panel') => {
       if (!get().nodes.some((n) => n.id === id)) return
       set({ expanded: { id, mode } })
@@ -152,8 +188,47 @@ export function createViewSlice(
     },
 
     onNodesChange: (changes) => {
+      // Sift the gravity causes out of the raw changes before they apply: a
+      // drag that just ended (dragging true → false) seeds a radial push from
+      // where the node dropped; a newborn's FIRST measurement seeds its
+      // deferred spawn push (real size, not the estimate — see
+      // pendingGravitySeeds); a measured height that grew (streaming reply,
+      // un-minimize, resize) seeds a downward one. First measurements outside
+      // the pending set (canvas load) seed nothing.
+      const on = get().autoLayout
+      const dropped: string[] = []
+      const spawned: string[] = []
+      for (const c of changes) {
+        if (c.type === 'position') {
+          if (!on) continue
+          if (c.dragging) draggingIds.add(c.id)
+          else if (draggingIds.delete(c.id)) dropped.push(c.id)
+        } else if (c.type === 'dimensions' && c.dimensions) {
+          const fresh = pendingGravitySeeds.delete(c.id) // clear even when off
+          if (!on) continue
+          if (fresh) {
+            spawned.push(c.id)
+            continue
+          }
+          const prev = get().nodes.find((n) => n.id === c.id)
+          const prevH = prev?.measured?.height
+          if (prev && !isLabel(prev) && prevH != null && c.dimensions.height > prevH + 1) {
+            growthSeeds.add(c.id)
+          }
+        }
+      }
       set((s) => ({ nodes: applyNodeChanges(changes, s.nodes) }))
       persist()
+      if (dropped.length > 0) applyGravity(dropped, 'radial')
+      if (spawned.length > 0) applyGravity(spawned, 'radial')
+      if (growthSeeds.size > 0 && growthTimer === undefined) {
+        growthTimer = setTimeout(() => {
+          growthTimer = undefined
+          const seeds = [...growthSeeds]
+          growthSeeds.clear()
+          applyGravity(seeds, 'down')
+        }, 240)
+      }
     },
 
     setViewport: (viewport) => {

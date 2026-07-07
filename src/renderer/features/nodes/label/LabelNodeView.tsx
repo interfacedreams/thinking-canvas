@@ -152,33 +152,36 @@ function LabelNodeView({ id, data, selected }: NodeProps<LabelNode>): React.JSX.
         style={{ textAlign: 'center', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}
       />
 
-      {/* Resize handles (right / bottom / corner), shown only when selected —
+      {/* Resize handles (all four edges and corners), shown only when selected —
           dragging them resizes the box, which re-fits the font. */}
       {selected && !editing && (
         <>
-          <NodeResizeControl
-            position="right"
-            variant={ResizeControlVariant.Line}
-            {...RESIZE_LIMITS}
-            style={{ borderColor: 'transparent', borderWidth: 5 }}
-          />
-          <NodeResizeControl
-            position="bottom"
-            variant={ResizeControlVariant.Line}
-            {...RESIZE_LIMITS}
-            style={{ borderColor: 'transparent', borderWidth: 5 }}
-          />
-          <NodeResizeControl
-            position="bottom-right"
-            {...RESIZE_LIMITS}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              width: 16,
-              height: 16,
-              cursor: 'nwse-resize'
-            }}
-          />
+          {(['top', 'right', 'bottom', 'left'] as const).map((position) => (
+            <NodeResizeControl
+              key={position}
+              position={position}
+              variant={ResizeControlVariant.Line}
+              {...RESIZE_LIMITS}
+              style={{ borderColor: 'transparent', borderWidth: 5 }}
+            />
+          ))}
+          {(['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const).map((position) => (
+            <NodeResizeControl
+              key={position}
+              position={position}
+              {...RESIZE_LIMITS}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                width: 16,
+                height: 16,
+                cursor:
+                  position === 'top-left' || position === 'bottom-right'
+                    ? 'nwse-resize'
+                    : 'nesw-resize'
+              }}
+            />
+          ))}
         </>
       )}
 

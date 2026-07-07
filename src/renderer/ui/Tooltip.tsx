@@ -9,10 +9,12 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 export default function Tooltip({
   label,
   delay = 700,
+  side = 'bottom',
   children
 }: {
   label: string
   delay?: number
+  side?: 'top' | 'bottom'
   children: ReactNode
 }): React.JSX.Element {
   const [show, setShow] = useState(false)
@@ -38,7 +40,9 @@ export default function Tooltip({
       {show && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-neutral-900/90 px-2 py-1 text-[12px] font-medium text-white shadow-lg"
+          className={`pointer-events-none absolute left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md bg-neutral-900/90 px-2 py-1 text-[12px] font-medium text-white shadow-lg ${
+            side === 'top' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+          }`}
         >
           {label}
         </span>

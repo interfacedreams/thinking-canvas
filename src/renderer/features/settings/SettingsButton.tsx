@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, Settings, Wrench } from 'lucide-react'
+import { KeyRound, LayoutGrid, Settings, Wrench } from 'lucide-react'
 import { useSettingsStore } from '@renderer/features/settings/settingsStore'
+import { useCanvasStore } from '@renderer/store/canvas'
 import AuthSection from '@renderer/features/settings/AuthSection'
 import TabbedModal, { type ModalTab } from '@renderer/ui/TabbedModal'
 
@@ -48,11 +49,12 @@ function ToggleRow({
   )
 }
 
-type Tab = 'subscription' | 'permissions'
+type Tab = 'subscription' | 'permissions' | 'canvas'
 
 const TABS: ModalTab[] = [
   { id: 'subscription', label: 'Credentials', icon: KeyRound },
-  { id: 'permissions', label: 'Tools', icon: Wrench }
+  { id: 'permissions', label: 'Tools', icon: Wrench },
+  { id: 'canvas', label: 'Canvas', icon: LayoutGrid }
 ]
 
 export default function SettingsButton(): React.JSX.Element {
@@ -64,6 +66,8 @@ export default function SettingsButton(): React.JSX.Element {
   const update = useSettingsStore((s) => s.update)
 
   const [tab, setTab] = useState<Tab>('subscription')
+  const autoLayout = useCanvasStore((s) => s.autoLayout)
+  const setAutoLayout = useCanvasStore((s) => s.setAutoLayout)
 
   // Load on mount, and retry every time the modal opens unloaded.
   useEffect(() => {
@@ -120,6 +124,23 @@ export default function SettingsButton(): React.JSX.Element {
               ) : (
                 <p className="text-[12px] text-neutral-400">Loading…</p>
               )}
+            </div>
+          )}
+
+          {tab === 'canvas' && (
+            <div>
+              <h3 className="mb-2 flex items-center gap-2 text-[14px] font-semibold text-black">
+                <LayoutGrid className="h-4 w-4" />
+                Canvas
+              </h3>
+              <div className="flex flex-col gap-1">
+                <ToggleRow
+                  label="Auto layout"
+                  description="Placing, dropping, or growing a card pushes overlapping cards out of the way."
+                  checked={autoLayout}
+                  onChange={setAutoLayout}
+                />
+              </div>
             </div>
           )}
         </TabbedModal>

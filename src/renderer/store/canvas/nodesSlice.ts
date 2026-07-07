@@ -1,5 +1,6 @@
 import {
   GAP,
+  KNOB_CLEARANCE,
   LINK_FRAME,
   NODE_W,
   fileFrame,
@@ -123,7 +124,8 @@ export function createNodesSlice(
       const src = sourceId ? get().nodes.find((n) => n.id === sourceId) : undefined
       const vp = get().viewport
       const position = src
-        ? { x: src.position.x + (src.width ?? NODE_W) + GAP, y: src.position.y }
+        ? // knob clearance too, so auto layout has nothing to resolve here
+          { x: src.position.x + (src.width ?? NODE_W) + KNOB_CLEARANCE + GAP, y: src.position.y }
         : { x: (-vp.x + 80) / vp.zoom, y: (-vp.y + 80) / vp.zoom }
       const node = get().addLinkAt(position, url)
       // One tab at a time in the panel — the fresh tab replaces whatever was open.

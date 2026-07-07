@@ -34,7 +34,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   const deleteChat = useCanvasStore((s) => s.deleteChat)
   const togglePin = useCanvasStore((s) => s.togglePin)
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
-  const setCtxConnectSource = useCanvasStore((s) => s.setCtxConnectSource)
+  const tapCtxKnob = useCanvasStore((s) => s.tapCtxKnob)
   const forkChat = useCanvasStore((s) => s.forkChat)
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   // While the transform composer is open, its tab covers the node's top; hide
@@ -181,7 +181,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
           title="Drag — or tap, then click a card — to connect · click empty canvas for a new connected chat"
           onClick={(e) => {
             e.stopPropagation()
-            setCtxConnectSource(armed ? null : id)
+            tapCtxKnob(id)
           }}
           className={`ctx-handle ${armed ? 'ctx-armed' : ''}`}
           style={ctxHandleStyle(palette.accent, 'top', 'circle')}

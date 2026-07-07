@@ -19,6 +19,12 @@ export const CLAUDE_MD_ID = 'claude-md'
 export const CLAUDE_MD_POS = { x: 360, y: 32 } // clear of the top-left canvas legends
 export const MIN_GROW_H = 280
 export const GAP = 24
+// The connection knob floats OUTSIDE the card: centered 21px past the top
+// (and right) edge with a 31px body (see nodeChrome.ctxHandleStyle), so it
+// pokes ~37px out of the node's bounding box. Anything that packs cards
+// edge-to-edge must leave this much extra room or the knob buries itself in
+// the neighbor.
+export const KNOB_CLEARANCE = 37
 // A derived note sits further right than a plain spawn — two background-dot
 // units (the dot grid is 44px) of breathing room between source and summary.
 export const DERIVE_GAP = 88
@@ -395,9 +401,10 @@ export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string>
  * Forks land directly to the right of their parent, level with its top — no
  * cascading and no overlap-avoidance. Siblings and anything in the way are
  * ignored: the fork may land on top of another card, and the user drags it
- * wherever they want it.
+ * wherever they want it. Clear of the parent's fork knob, so auto layout
+ * (which counts the knob zone as part of the card) has nothing to resolve.
  */
 export function findForkSpot(parent: ChatNode): { x: number; y: number } {
   const p = boxOf(parent)
-  return { x: p.x + p.w + GAP, y: p.y }
+  return { x: p.x + p.w + KNOB_CLEARANCE + GAP, y: p.y }
 }

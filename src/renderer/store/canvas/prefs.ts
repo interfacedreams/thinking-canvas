@@ -22,3 +22,9 @@ export function loadEffort(): EffortId {
   const saved = loadPref(EFFORT_STORAGE_KEY, 'bee-claude:effort')
   return EFFORT_OPTIONS.some((e) => e.id === saved) ? (saved as EffortId) : DEFAULT_EFFORT
 }
+
+// Gravity auto layout (see store/canvas/autoLayout) — on unless switched off.
+export const AUTO_LAYOUT_STORAGE_KEY = 'thinking-canvas:autoLayout'
+export function loadAutoLayout(): boolean {
+  return localStorage.getItem(AUTO_LAYOUT_STORAGE_KEY) !== 'false'
+}

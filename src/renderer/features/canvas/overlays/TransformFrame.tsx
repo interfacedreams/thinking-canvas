@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import TextareaAutosize from 'react-textarea-autosize'
-import { X } from 'lucide-react'
+import { ArrowUp, X } from 'lucide-react'
 import { useCanvasStore, isNote } from '@renderer/store/canvas'
 import { contrastColorId, paletteFor } from '@renderer/lib/palette'
-import CanvasMark from '@renderer/ui/CanvasMark'
 
 /**
  * Transform mode's visible wrap: a colored header tab behind the node carrying
@@ -61,17 +60,31 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
   // rewrite this note in place. Offered for note sources only.
   const [inPlace, setInPlace] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const controlsRef = useRef<HTMLDivElement>(null)
 
   // The wrapper previews the outcome's color: editing in place keeps the result
   // in THIS note (its own color); deriving picks a contrast color, the one the
   // new note will wear.
   const wrap = paletteFor(inPlace ? sourceColor : contrastColorId(sourceColor))
   const bar = HEADER + INPUT_ROW
+  // The command bar's live height: `bar` while the draft is one line, taller as
+  // the textarea grows. The bar is bottom-anchored to the node's top so growth
+  // extends upward; the tab background and dashed outline (top-anchored, so
+  // they can tuck under / wrap the node) follow this measurement.
+  const [barH, setBarH] = useState(bar)
 
   // Pull the keyboard in once mounted (a fresh arm = a fresh mount).
   useEffect(() => {
     const t = setTimeout(() => textareaRef.current?.focus(), 0)
     return () => clearTimeout(t)
+  }, [])
+
+  useEffect(() => {
+    const el = controlsRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setBarH(el.offsetHeight))
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [])
 
   const canSend = draft.trim().length > 0
@@ -112,10 +125,10 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
         className="nodrag"
         style={{
           position: 'absolute',
-          top: -bar,
+          top: -barH,
           left: -SIDE,
           right: -SIDE,
-          height: bar + TUCK,
+          height: barH + TUCK,
           zIndex: -2,
           background: wrap.bg,
           borderTopLeftRadius: OUTER_RADIUS,
@@ -127,10 +140,11 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
           the node's own header (same height, chip button, line underneath),
           with the textarea row beneath it. */}
       <div
+        ref={controlsRef}
         className="nodrag nowheel"
         style={{
           position: 'absolute',
-          top: -bar,
+          bottom: '100%',
           left: -SIDE,
           right: -SIDE,
           minHeight: bar,
@@ -271,16 +285,10 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
               onClick={submit}
               disabled={!canSend}
               title={inPlace ? 'Rewrite this note (Enter)' : 'Transform into a note (Enter)'}
-              style={{
-                flexShrink: 0,
-                background: 'transparent',
-                border: 'none',
-                padding: 2,
-                opacity: canSend ? 1 : 0.3,
-                cursor: canSend ? 'pointer' : 'default'
-              }}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center self-end rounded-full text-white transition-all hover:scale-110 active:scale-95 disabled:cursor-default disabled:opacity-30"
+              style={{ background: wrap.accent, margin: '5px 4px' }}
             >
-              <CanvasMark className="h-6 w-6" />
+              <ArrowUp className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -292,7 +300,7 @@ function TransformComposer({ id }: { id: string }): React.JSX.Element {
         className="nodrag"
         style={{
           position: 'absolute',
-          top: -bar,
+          top: -barH,
           left: -SIDE,
           right: -SIDE,
           bottom: -DASH,

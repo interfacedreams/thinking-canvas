@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { CanvasState } from './state'
 import { createStoreHelpers } from './helpers'
-import { loadEffort, loadModel } from './prefs'
+import { loadAutoLayout, loadEffort, loadModel } from './prefs'
 import { createChatSlice } from './chatSlice'
 import { createFoldersSlice } from './foldersSlice'
 import { createMemorySlice } from './memorySlice'
@@ -19,6 +19,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     folder: null,
     model: loadModel(),
     effort: loadEffort(),
+    autoLayout: loadAutoLayout(),
     anchorOffsets: {},
     pendingDeleteId: null,
     placing: null,
