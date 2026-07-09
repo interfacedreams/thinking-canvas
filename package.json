@@ -2,6 +2,7 @@
   "name": "thinking-canvas",
   "version": "0.1.13",
   "description": "Local-repo-native agentic research canvas",
+  "license": "AGPL-3.0-only",
   "main": "./out/main/index.js",
   "scripts": {
     "format": "prettier --write .",

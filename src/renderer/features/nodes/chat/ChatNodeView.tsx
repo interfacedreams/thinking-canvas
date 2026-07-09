@@ -4,11 +4,12 @@ import {
   NodeResizeControl,
   Position,
   ResizeControlVariant,
+  useReactFlow,
   useStoreApi,
   type NodeProps
 } from '@xyflow/react'
 import { Brain, GitFork, Minus, Plus, Trash2, TriangleAlert } from 'lucide-react'
-import { useCanvasStore, MAX_NODE_H, type ChatNode } from '@renderer/store/canvas'
+import { useCanvasStore, MAX_NODE_H, NODE_W, type ChatNode } from '@renderer/store/canvas'
 import { paletteFor } from '@renderer/lib/palette'
 import { usePanel } from '@renderer/features/nodes/shared/usePanel'
 import ChatBody, { type ChatBodyHandle } from '@renderer/features/nodes/chat/ChatBody'
@@ -36,6 +37,20 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
   const toggleMinimize = useCanvasStore((s) => s.toggleMinimize)
   const tapCtxKnob = useCanvasStore((s) => s.tapCtxKnob)
   const forkChat = useCanvasStore((s) => s.forkChat)
+  const { setCenter, getZoom } = useReactFlow()
+  // Fork, then glide to center on the newborn card — the same framing as
+  // spawning a chat by double-click (Canvas), so the fork is ready to type in
+  // even when it lands off-screen beneath a stack of earlier forks.
+  const forkAndCenter = useCallback(() => {
+    const newId = forkChat(id)
+    if (!newId) return
+    const node = useCanvasStore.getState().nodes.find((n) => n.id === newId)
+    if (!node) return
+    void setCenter(node.position.x + NODE_W / 2, node.position.y + 150, {
+      zoom: Math.max(getZoom(), 1),
+      duration: 250
+    })
+  }, [forkChat, id, setCenter, getZoom])
   const armed = useCanvasStore((s) => s.ctxConnectSource === id)
   // While the transform composer is open, its tab covers the node's top; hide
   // the top connector so its circle doesn't poke out over the tab seam.
@@ -197,7 +212,7 @@ function ChatNodeView({ id, data, selected, height }: NodeProps<ChatNode>): Reac
       {!isResearch && !data.minimized && !transforming && forkable && (
         <button
           type="button"
-          onClick={() => forkChat(id)}
+          onClick={forkAndCenter}
           title="Fork — branch a new chat from the last reply"
           className="nodrag absolute top-1/2 z-10 flex cursor-pointer items-center justify-center transition-transform hover:scale-110 active:scale-95"
           style={{

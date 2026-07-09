@@ -91,7 +91,7 @@ export function createChatSlice(
 
       // The forked session carries the parent's context up to the anchor —
       // the node's transcript starts clean and shows only what diverges.
-      const node = makeNode(at ?? findForkSpot(parent), {
+      const node = makeNode(at ?? findForkSpot(parent, get().nodes, get().edges), {
         // Start untitled like a fresh chat; the title is generated from the
         // fork's own first message rather than inherited from the parent.
         color: parent.data.color, // forks stay in the parent's color family

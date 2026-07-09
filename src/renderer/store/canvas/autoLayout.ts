@@ -19,6 +19,11 @@ interface Box {
   y: number
   w: number
   h: number
+  /** Labels are pushees only: cards shove them aside like anything else, but
+   *  a label never pushes back — they're floating annotations, often
+   *  deliberately parked on top of things, so a displaced (or freshly
+   *  placed) label displaces nothing in turn. */
+  label: boolean
 }
 
 /**
@@ -38,36 +43,41 @@ interface Box {
  * gets it clear soonest, away from the pusher. bias 'down' (content growth):
  * a card below the grower is pushed straight down — a chat streams its reply
  * downward, so the room it takes should read as downward too.
+ *
+ * Labels ride the wave as pushees only — cards shove them aside like anything
+ * else, but a label never pushes (see Box.label).
  */
 export function resolveCollisions(
   nodes: CanvasNode[],
   seedIds: ReadonlySet<string>,
   bias: GravityBias
 ): Map<string, XY> {
-  // Labels sit out entirely — they float above the cards as annotations and
-  // are often deliberately placed on top of things.
-  // Boxes are knob-inclusive: grown upward and rightward by KNOB_CLEARANCE
-  // (positions convert back when a move is recorded).
-  const boxes: Box[] = nodes
-    .filter((n) => !isLabel(n))
-    .map((n) => {
-      const b = boxOf(n)
-      return {
-        id: n.id,
-        x: b.x,
-        y: b.y - KNOB_CLEARANCE,
-        w: b.w + KNOB_CLEARANCE,
-        h: b.h + KNOB_CLEARANCE
-      }
-    })
+  // Card boxes are knob-inclusive: grown upward and rightward by
+  // KNOB_CLEARANCE (positions convert back when a move is recorded). Labels
+  // have no knob, so their boxes are the raw frame.
+  const boxes: Box[] = nodes.map((n) => {
+    const b = boxOf(n)
+    return isLabel(n)
+      ? { id: n.id, x: b.x, y: b.y, w: b.w, h: b.h, label: true }
+      : {
+          id: n.id,
+          x: b.x,
+          y: b.y - KNOB_CLEARANCE,
+          w: b.w + KNOB_CLEARANCE,
+          h: b.h + KNOB_CLEARANCE,
+          label: false
+        }
+  })
   const byId = new Map(boxes.map((b) => [b.id, b]))
   const seeds = [...seedIds].filter((id) => byId.has(id))
   const seedBoxes = seeds.map((id) => byId.get(id)!)
   const moved = new Map<string, XY>()
 
   // Push b clear of a along one axis. False when they don't truly overlap
-  // (sub-pixel contact doesn't count).
+  // (sub-pixel contact doesn't count) or when a is a label (labels never
+  // push — not even as seeds).
   const push = (a: Box, b: Box): boolean => {
+    if (a.label) return false
     const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
     const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
     if (ox <= 1 || oy <= 1) return false
@@ -78,7 +88,7 @@ export function resolveCollisions(
     if (bias === 'down' && downward) b.y += dy
     else if (Math.abs(dx) <= Math.abs(dy)) b.x += dx
     else b.y += dy
-    moved.set(b.id, { x: b.x, y: b.y + KNOB_CLEARANCE }) // back to node coords
+    moved.set(b.id, { x: b.x, y: b.y + (b.label ? 0 : KNOB_CLEARANCE) }) // back to node coords
     return true
   }
 

@@ -458,13 +458,32 @@ export function forkSubtree(edges: PersistedEdge[], rootId: string): Set<string>
 }
 
 /**
- * Forks land directly to the right of their parent, level with its top — no
- * cascading and no overlap-avoidance. Siblings and anything in the way are
- * ignored: the fork may land on top of another card, and the user drags it
- * wherever they want it. Clear of the parent's fork knob, so auto layout
- * (which counts the knob zone as part of the card) has nothing to resolve.
+ * The first fork lands directly to the right of its parent, level with its
+ * top — clear of the parent's fork knob, so auto layout (which counts the
+ * knob zone as part of the card) has nothing to resolve. Later forks stack
+ * beneath the lowest existing sibling (wherever the user dragged it), so
+ * repeated forking builds a column instead of piling cards on one spot.
+ * Anything else in the way is ignored: the user drags cards where they want.
  */
-export function findForkSpot(parent: ChatNode): { x: number; y: number } {
+export function findForkSpot(
+  parent: ChatNode,
+  nodes: CanvasNode[],
+  edges: PersistedEdge[]
+): { x: number; y: number } {
+  // Only fork edges carry a sourceMessageId (context/output/derive never do).
+  const forkIds = new Set(
+    edges.filter((e) => e.source === parent.id && e.sourceMessageId).map((e) => e.target)
+  )
+  const siblings = nodes.filter((n) => forkIds.has(n.id))
+  if (siblings.length > 0) {
+    const lowest = siblings.reduce((a, b) => {
+      const ba = boxOf(a)
+      const bb = boxOf(b)
+      return bb.y + bb.h > ba.y + ba.h ? b : a
+    })
+    const box = boxOf(lowest)
+    return { x: box.x, y: box.y + box.h + GAP }
+  }
   const p = boxOf(parent)
   return { x: p.x + p.w + KNOB_CLEARANCE + GAP, y: p.y }
 }
