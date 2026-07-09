@@ -13,7 +13,7 @@ npm run dev
 
 The app should open automatically as a Mac app.
 
-Optionally, run `claude setup-token` to authenticate with your Claude subscription, then copy and paste the token into the app's settings (button in the lower left). Otherwise, you'll need an API key.
+Optionally, run `claude setup-token` to authenticate with your Claude subscription, then copy/paste the token into the app's settings (button in the lower left). Otherwise, you'll need an API key.
 
 ## About
 
