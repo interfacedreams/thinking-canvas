@@ -173,7 +173,15 @@ export function createViewSlice(
       set({ expanded: { id, mode } })
     },
 
-    collapseExpanded: () => set({ expanded: null }),
+    // Closing the panel returns the node's body to its canvas card — that's a
+    // placement as far as gravity goes, so the card re-asserts its box with a
+    // radial push (idempotent: nothing moves unless something ended up under
+    // it, e.g. a tab spawned into the panel over a crowded spot).
+    collapseExpanded: () => {
+      const id = get().expanded?.id
+      set({ expanded: null })
+      if (id) applyGravity([id], 'radial')
+    },
 
     setAnchorOffsets: (nodeId, offsets) => {
       set((s) => {
